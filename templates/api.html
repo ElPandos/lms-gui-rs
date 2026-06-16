@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}API — LMS{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-4">LM Studio API (port 8010)</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700 text-xs uppercase">
+                        <th class="text-left py-2 px-3">Method</th>
+                        <th class="text-left py-2 px-3">Endpoint</th>
+                        <th class="text-left py-2 px-3">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/v1/models</td><td class="py-2 px-3 text-gray-400">List available models</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/chat/completions</td><td class="py-2 px-3 text-gray-400">Chat with a model (OpenAI compatible)</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/completions</td><td class="py-2 px-3 text-gray-400">Text completion</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/embeddings</td><td class="py-2 px-3 text-gray-400">Generate embeddings</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <h2 class="text-sm font-semibold text-green-400 uppercase tracking-wide mb-4">Dashboard API (port 3000)</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700 text-xs uppercase">
+                        <th class="text-left py-2 px-3">Method</th>
+                        <th class="text-left py-2 px-3">Endpoint</th>
+                        <th class="text-left py-2 px-3">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models</td><td class="py-2 px-3 text-gray-400">Model list as JSON</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models/loaded</td><td class="py-2 px-3 text-gray-400">Loaded models output</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/stats</td><td class="py-2 px-3 text-gray-400">Traffic stats as JSON</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/download/status?q=name</td><td class="py-2 px-3 text-gray-400">Download progress for a model</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/load/status</td><td class="py-2 px-3 text-gray-400">Model load status</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/download</td><td class="py-2 px-3 text-gray-400">Start model download</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/load</td><td class="py-2 px-3 text-gray-400">Load model into memory</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/unload</td><td class="py-2 px-3 text-gray-400">Unload model from memory</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-red-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/delete</td><td class="py-2 px-3 text-gray-400">Delete model from disk</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/runtime/select</td><td class="py-2 px-3 text-gray-400">Switch active runtime</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-xs text-gray-500 mt-3">POST endpoints accept JSON body: <code class="text-gray-300">{"model_name": "..."}</code></p>
+    </div>
+</div>
+{% endblock %}

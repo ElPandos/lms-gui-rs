@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+{% block title %}Models — LMS{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    <!-- Search -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <h2 class="text-sm font-semibold text-yellow-400 uppercase tracking-wide mb-3">Search Models to Download</h2>
+        <!-- Source tabs -->
+        <div class="flex items-center gap-2 mb-3">
+            <a href="/models?q={{ query }}&source=lms" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "lms" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">LM Studio</a>
+            <a href="/models?q={{ query }}&source=hf" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "hf" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">HuggingFace</a>
+            {% if search_source == "hf" %}
+            <select onchange="window.location.href='/models?q={{ query }}&source=hf&sort='+this.value"
+                class="ml-2 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                <option value="downloads" {% if search_sort == "downloads" %}selected{% endif %}>Most Downloaded</option>
+                <option value="likes" {% if search_sort == "likes" %}selected{% endif %}>Most Liked</option>
+                <option value="newest" {% if search_sort == "newest" %}selected{% endif %}>Newest</option>
+            </select>
+            {% endif %}
+        </div>
+        <form method="get" action="/models" class="flex gap-3" onsubmit="showSearchSpinner()">
+            <input type="hidden" name="source" value="{{ search_source }}">
+            <input type="text" name="q" value="{{ query }}" placeholder="e.g. llama, qwen, gemma, mistral"
+                title="Enter a model name or keyword to search"
+                class="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+            <button type="submit" id="search-btn"
+                title="Search for models"
+                class="bg-yellow-600 hover:bg-yellow-700 px-5 py-2 rounded text-sm font-medium transition">Search</button>
+        </form>
+        <!-- LMS results -->
+        {% if !search_results.is_empty() %}
+        <p class="text-xs text-gray-400 mt-3">{{ search_results.len() }} models found</p>
+        <div class="mt-2 space-y-2">
+            {% for result in search_results %}
+            <div class="bg-gray-900 rounded px-4 py-3 border border-gray-700" id="dl-card-{{ loop.index }}">
+                <div class="flex items-center justify-between">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-mono text-gray-100 truncate">{{ result.name }}</p>
+                        {% if !result.description.is_empty() %}
+                        <p class="text-xs text-gray-400 mt-0.5 truncate">{{ result.description }}</p>
+                        {% endif %}
+                        <span class="dl-info text-xs text-gray-400 hidden"></span>
+                    </div>
+                    <button onclick="startDownload('{{ result.name }}', this)"
+                        title="Download {{ result.name }}"
+                        class="ml-3 shrink-0 text-xs bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded transition">⬇ Get</button>
+                </div>
+                <div class="dl-progress mt-2 hidden">
+                    <div class="w-full bg-gray-700 rounded-full h-1.5">
+                        <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <!-- HuggingFace results -->
+        {% if !hf_results.is_empty() %}
+        <p class="text-xs text-gray-400 mt-3">{{ hf_results.len() }} models found on HuggingFace</p>
+        <div class="mt-2 space-y-2">
+            {% for model in hf_results %}
+            <div class="bg-gray-900 rounded px-4 py-3 border border-gray-700" id="hf-card-{{ loop.index }}">
+                <div class="flex items-center justify-between">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-mono text-gray-100 truncate">{{ model.model_id }}</p>
+                        <p class="text-xs text-gray-500 mt-0.5">⬇ {{ model.downloads }} · ♥ {{ model.likes }}</p>
+                    </div>
+                    <button onclick="startDownload('https://huggingface.co/{{ model.model_id }}', this)"
+                        title="Download {{ model.model_id }}"
+                        class="ml-3 shrink-0 text-xs bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded transition">⬇ Get</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Active Downloads -->
+    <div id="active-downloads-section" class="bg-gray-800 rounded-lg p-5 border border-gray-700 hidden">
+        <h2 class="text-sm font-semibold text-green-400 uppercase tracking-wide mb-3">Active Downloads</h2>
+        <div id="active-downloads-list" class="space-y-2"></div>
+    </div>
+
+    <!-- Local disk table -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700" id="local-disk-section">
+        <div class="flex items-center justify-between mb-2">
+            <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide" title="Models stored on the server's local disk">Local Disk (lms ls)</h2>
+            <span class="text-xs text-gray-500 font-mono">~/.lmstudio/models/</span>
+        </div>
+        {% if !disk_summary.is_empty() || !disk_total.is_empty() %}
+        <p class="text-xs text-gray-400 mb-3">{{ disk_summary }}{% if !disk_total.is_empty() %} — Disk: {{ disk_total }} (total/free){% endif %}</p>
+        {% endif %}
+        {% if local_models.is_empty() %}
+        <p class="text-gray-500 text-sm italic">No local models found</p>
+        {% else %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700 text-xs uppercase">
+                        <th class="text-left py-2 px-3">Model</th>
+                        <th class="text-left py-2 px-3">Type</th>
+                        <th class="text-left py-2 px-3">Params</th>
+                        <th class="text-left py-2 px-3">Arch</th>
+                        <th class="text-left py-2 px-3">Size</th>
+                        <th class="text-left py-2 px-3">Status</th>
+                        <th class="text-right py-2 px-3">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in local_models %}
+                    <tr class="border-b border-gray-700/30 hover:bg-gray-700/20">
+                        <td class="py-2 px-3 font-mono text-gray-100">{{ m.name }}</td>
+                        <td class="py-2 px-3 text-xs text-gray-400">{{ m.model_type }}</td>
+                        <td class="py-2 px-3 text-xs text-gray-300">{{ m.params }}</td>
+                        <td class="py-2 px-3 text-xs text-gray-300">{{ m.arch }}</td>
+                        <td class="py-2 px-3 text-xs text-gray-300">{{ m.size }}</td>
+                        <td class="py-2 px-3 text-xs {% if m.status.contains("LOADED") %}text-green-400{% else %}text-gray-400{% endif %}">{{ m.status }}</td>
+                        <td class="py-2 px-3 text-right">
+                            <button onclick="deleteModel('{{ m.name }}', this)"
+                                title="Delete {{ m.name }} from disk"
+                                class="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded transition">Delete</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function showSearchSpinner() {
+    const btn = document.getElementById('search-btn');
+    btn.classList.add('btn-loading');
+    btn.innerHTML = '<span class="spinner"></span> Searching...';
+}
+
+async function deleteModel(name, btn) {
+    if (!confirm(`Delete ${name} from disk? This cannot be undone.`)) return;
+    const resp = await apiPost('/models/delete', {model_name: name}, btn);
+    if (resp && resp.success) {
+        btn.closest('tr').remove();
+        refreshLocalDisk();
+    }
+}
+
+// Track active downloads in sessionStorage
+function getActiveDownloads() {
+    return JSON.parse(sessionStorage.getItem('activeDownloads') || '{}');
+}
+function setDownloadActive(name) {
+    const dl = getActiveDownloads();
+    dl[name] = true;
+    sessionStorage.setItem('activeDownloads', JSON.stringify(dl));
+}
+function removeDownloadActive(name) {
+    const dl = getActiveDownloads();
+    delete dl[name];
+    sessionStorage.setItem('activeDownloads', JSON.stringify(dl));
+}
+
+// On page load: show active downloads in the dedicated section
+document.addEventListener('DOMContentLoaded', () => {
+    const active = getActiveDownloads();
+    const names = Object.keys(active);
+    if (names.length === 0) return;
+
+    const section = document.getElementById('active-downloads-section');
+    const list = document.getElementById('active-downloads-list');
+    section.classList.remove('hidden');
+
+    names.forEach(name => {
+        const card = document.createElement('div');
+        card.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
+        card.id = 'active-dl-' + name.replace(/\//g, '_');
+        card.innerHTML = `
+            <div class="flex items-center justify-between">
+                <div class="min-w-0 flex-1">
+                    <p class="text-sm font-mono text-gray-100">${name}</p>
+                    <span class="dl-info text-xs text-gray-400">Checking...</span>
+                </div>
+                <button onclick="cancelActiveDownload('${name}', this)"
+                    class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
+            </div>
+            <div class="dl-progress mt-2">
+                <div class="w-full bg-gray-700 rounded-full h-1.5">
+                    <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>`;
+        list.appendChild(card);
+        pollActiveDownload(name, card);
+    });
+
+    // Also resume any matching search cards
+    document.querySelectorAll('[id^=dl-card]').forEach(card => {
+        const nameEl = card.querySelector('.font-mono');
+        if (!nameEl) return;
+        const name = nameEl.textContent.trim();
+        if (active[name]) {
+            card.remove(); // remove from search results since it's in active downloads section
+        }
+    });
+});
+
+function cancelActiveDownload(name, btn) {
+    removeDownloadActive(name);
+    fetch(`/models/download/status?q=${encodeURIComponent(name)}&clear=1`);
+    const card = btn.closest('[id^=active-dl]');
+    if (card) card.remove();
+    const section = document.getElementById('active-downloads-section');
+    if (section.querySelector('#active-downloads-list').children.length === 0) {
+        section.classList.add('hidden');
+    }
+    showToast('Download cancelled', false);
+}
+
+function pollActiveDownload(name, card) {
+    const barEl = card.querySelector('.dl-bar');
+    const info = card.querySelector('.dl-info');
+    const interval = setInterval(async () => {
+        try {
+            const resp = await fetch(`/models/download/status?q=${encodeURIComponent(name)}`);
+            const data = await resp.json();
+            const msg = data.message.toLowerCase();
+            if (msg.includes('already') || msg.includes('download completed') || msg.includes('downloaded') || msg.includes('satisfied') || msg.includes('finalizing')) {
+                clearInterval(interval);
+                removeDownloadActive(name);
+                barEl.style.width = '100%';
+                barEl.classList.replace('bg-blue-500', 'bg-green-500');
+                info.textContent = 'Complete';
+                showToast('Download complete: ' + name, false);
+                setTimeout(() => {
+                    card.remove();
+                    const section = document.getElementById('active-downloads-section');
+                    if (document.getElementById('active-downloads-list').children.length === 0) {
+                        section.classList.add('hidden');
+                    }
+                    refreshLocalDisk();
+                }, 5000);
+                return;
+            }
+            if (data.message.includes('%')) {
+                const matches = [...data.message.matchAll(/(\d+[\.,]\d+)%/g)];
+                if (matches.length > 0) {
+                    const last = matches[matches.length - 1][1].replace(',', '.');
+                    const pct = Math.round(parseFloat(last));
+                    if (pct >= 100) {
+                        clearInterval(interval);
+                        removeDownloadActive(name);
+                        barEl.style.width = '100%';
+                        barEl.classList.replace('bg-blue-500', 'bg-green-500');
+                        info.textContent = 'Complete';
+                        showToast('Download complete: ' + name, false);
+                        setTimeout(() => {
+                            card.remove();
+                            const section = document.getElementById('active-downloads-section');
+                            if (document.getElementById('active-downloads-list').children.length === 0) {
+                                section.classList.add('hidden');
+                            }
+                            refreshLocalDisk();
+                        }, 5000);
+                        return;
+                    }
+                    barEl.style.width = `${pct}%`;
+                }
+                const speedMatch = data.message.match(/([\d.,]+\s*[MG]B\/s)/);
+                const etaMatch = data.message.match(/ETA\s+([\d:]+)/);
+                let details = [];
+                const allPct = [...data.message.matchAll(/(\d+[\.,]\d+)%/g)];
+                if (allPct.length) details.push(`${Math.round(parseFloat(allPct[allPct.length-1][1].replace(',','.')))}%`);
+                if (speedMatch) details.push(speedMatch[1]);
+                if (etaMatch) details.push(`ETA ${etaMatch[1]}`);
+                info.textContent = details.join(' · ');
+            }
+            if (msg.includes('no log') || msg.includes('failed')) {
+                clearInterval(interval);
+                removeDownloadActive(name);
+                card.remove();
+            }
+        } catch (e) { clearInterval(interval); }
+    }, 3000);
+}
+
+async function startDownload(name, btn) {
+    if (btn.classList.contains('btn-loading')) return;
+    btn.classList.add('btn-loading');
+    btn.innerHTML = '<span class="spinner"></span>';
+    await fetch(`/models/download/status?q=${encodeURIComponent(name)}&clear=1`);
+    const resp = await apiPost('/models/download', {model_name: name});
+    btn.classList.remove('btn-loading');
+    if (resp && resp.success) {
+        setDownloadActive(name);
+        // Remove from search results and add to active downloads section
+        const card = btn.closest('[id^=dl-card]');
+        if (card) card.remove();
+        const section = document.getElementById('active-downloads-section');
+        const list = document.getElementById('active-downloads-list');
+        section.classList.remove('hidden');
+        const dlCard = document.createElement('div');
+        dlCard.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
+        dlCard.id = 'active-dl-' + name.replace(/\//g, '_');
+        dlCard.innerHTML = `
+            <div class="flex items-center justify-between">
+                <div class="min-w-0 flex-1">
+                    <p class="text-sm font-mono text-gray-100">${name}</p>
+                    <span class="dl-info text-xs text-gray-400">Starting...</span>
+                </div>
+                <button onclick="cancelActiveDownload('${name}', this)"
+                    class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
+            </div>
+            <div class="dl-progress mt-2">
+                <div class="w-full bg-gray-700 rounded-full h-1.5">
+                    <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>`;
+        list.appendChild(dlCard);
+        pollActiveDownload(name, dlCard);
+    } else {
+        btn.innerHTML = '⬇ Get';
+    }
+}
+
+async function refreshLocalDisk() {
+    try {
+        const resp = await fetch('/models');
+        const html = await resp.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newSection = doc.getElementById('local-disk-section');
+        if (newSection) {
+            document.getElementById('local-disk-section').innerHTML = newSection.innerHTML;
+        }
+    } catch(e) { console.error('refreshLocalDisk failed:', e); }
+}
+</script>
+{% endblock %}

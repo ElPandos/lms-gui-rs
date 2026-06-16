@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}LMS Dashboard{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        pre { white-space: pre-wrap; word-wrap: break-word; font-size: 0.8rem; }
+        .spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .btn-loading { pointer-events: none; opacity: 0.7; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <nav class="bg-gray-800 border-b border-gray-700 px-6 py-3">
+        <div class="flex items-center justify-between max-w-screen-2xl mx-auto">
+            <a href="/" class="text-xl font-bold text-blue-400 hover:text-blue-300" title="Go to dashboard">⚡ LMS</a>
+            <div class="flex gap-6 text-sm" id="nav-links">
+                <a href="/" class="py-1 hover:text-blue-400 transition" title="Overview of models, runtime, and server">Dashboard</a>
+                <a href="/models" class="py-1 hover:text-blue-400 transition" title="Search and browse available models">Models</a>
+                <a href="/runtime/status" class="py-1 hover:text-blue-400 transition" title="Check runtime versions and updates">Runtime</a>
+                <a href="/logs" class="py-1 hover:text-blue-400 transition" title="View LM Studio server logs">Logs</a>
+                <a href="/stats" class="py-1 hover:text-blue-400 transition" title="Traffic statistics and event log">Stats</a>
+                <a href="/api" class="py-1 hover:text-blue-400 transition" title="API endpoint documentation">API</a>
+            </div>
+        </div>
+    </nav>
+    <script>document.querySelectorAll('#nav-links a').forEach(a => { if (a.pathname === location.pathname || (a.pathname !== '/' && location.pathname.startsWith(a.pathname))) a.classList.add('text-blue-400', 'border-b-2', 'border-blue-400'); });</script>
+    <main class="max-w-screen-2xl mx-auto p-6">
+        {% block content %}{% endblock %}
+    </main>
+    <div id="toast" class="fixed bottom-4 right-4 z-50 hidden">
+        <div id="toast-msg" class="rounded-lg px-4 py-3 shadow-lg text-sm border max-w-md"></div>
+    </div>
+    <script>
+    function showToast(msg, isError) {
+        const t = document.getElementById('toast');
+        const m = document.getElementById('toast-msg');
+        const text = msg.length > 100 ? msg.substring(0, 100) + '…' : msg;
+        m.textContent = text;
+        m.className = `rounded-lg px-4 py-3 shadow-lg text-sm border max-w-md ${isError ? 'bg-red-900/90 border-red-700 text-red-200' : 'bg-green-900/90 border-green-700 text-green-200'}`;
+        t.classList.remove('hidden');
+        setTimeout(() => t.classList.add('hidden'), 5000);
+    }
+    async function apiPost(url, body, btn) {
+        if (btn) { btn.classList.add('btn-loading'); btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; }
+        try {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            const data = await resp.json();
+            showToast(data.message || (data.success ? 'Done' : 'Failed'), !data.success);
+            return data;
+        } catch (e) {
+            showToast('Network error: ' + e.message, true);
+            return { success: false };
+        } finally {
+            if (btn) { btn.classList.remove('btn-loading'); btn.innerHTML = btn.dataset.orig; }
+        }
+    }
+    async function refreshPage(btn) {
+        btn.dataset.orig = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner"></span>';
+        btn.classList.add('btn-loading');
+        try {
+            const resp = await fetch(location.href);
+            const html = await resp.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            document.querySelector('main').innerHTML = doc.querySelector('main').innerHTML;
+            showToast('Refreshed', false);
+        } catch (e) {
+            showToast('Refresh failed: ' + e.message, true);
+            btn.classList.remove('btn-loading');
+            btn.innerHTML = btn.dataset.orig;
+        }
+    }
+    </script>
+</body>
+</html>

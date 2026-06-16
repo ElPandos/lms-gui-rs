@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}LMS Dashboard{% endblock %}
+{% block content %}
+<!-- Host Info Card (E2 layout) -->
+<div class="bg-gray-800 rounded-lg p-5 border border-gray-700 mb-6">
+    <!-- Top row: 3 system cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+            <p class="text-xs text-gray-400 uppercase mb-1">Host</p>
+            <p class="text-sm font-mono text-cyan-400">{{ host.hostname }}</p>
+            <p class="text-xs text-gray-500 mt-1">{{ host.os }}</p>
+            <p class="text-xs text-gray-500">{{ host.uptime }}</p>
+        </div>
+        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+            <p class="text-xs text-gray-400 uppercase mb-1">CPU</p>
+            <p class="text-sm text-gray-200">{{ host.cpu }}</p>
+            <p class="text-xs text-gray-500 mt-1">{{ host.cores }} cores</p>
+        </div>
+        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+            <p class="text-xs text-gray-400 uppercase mb-1">Memory &amp; Disk</p>
+            <p class="text-sm text-gray-200">RAM: {{ host.ram }}</p>
+            <p class="text-xs text-gray-500 mt-1">Disk: {{ host.disk }}</p>
+        </div>
+    </div>
+    <!-- Bottom: GPU full-width card with driver badges -->
+    <div class="bg-gray-900 rounded p-3 border border-gray-700">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+            <div>
+                <p class="text-xs text-gray-400 uppercase mb-1">GPU</p>
+                <p class="text-sm text-gray-200">{{ host.gpu_count }} × {{ host.gpu }}</p>
+            </div>
+            <div class="flex gap-2">
+                <span class="text-xs bg-green-900/50 text-green-300 border border-green-700 px-2 py-0.5 rounded">NVIDIA {{ host.nvidia_driver }}</span>
+                <span class="text-xs bg-blue-900/50 text-blue-300 border border-blue-700 px-2 py-0.5 rounded">CUDA {{ host.cuda_version }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-3 gap-6">
+    <!-- Models Card -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3" title="Models available via the LM Studio API">Available Models</h2>
+        <div class="space-y-2" id="available-models">
+            {% for model in models %}
+            <div class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700" title="~/.lmstudio/models/lmstudio-community/{{ model.id }}">
+                <span class="text-sm font-mono truncate mr-2">{{ model.id }}</span>
+                <div class="flex gap-1 shrink-0">
+                    <button onclick="loadModel('{{ model.id }}', this)"
+                        class="text-xs bg-green-700 hover:bg-green-600 px-2 py-0.5 rounded transition"
+                        title="Load this model into GPU memory">Load</button>
+                </div>
+            </div>
+            {% endfor %}
+            {% if models.is_empty() %}
+            <p class="text-gray-500 text-sm italic">No models from API</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Loaded Models -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-green-400 uppercase tracking-wide" title="Models currently loaded in memory">Loaded Models</h2>
+            <span class="text-xs text-gray-400" title="GPU VRAM used / total">Used: {{ gpu_mem }}</span>
+        </div>
+        <div id="loaded-content">
+            {% if loaded_models.is_empty() %}
+            <p class="text-gray-500 text-sm italic">No models loaded</p>
+            {% else %}
+            <div class="space-y-2">
+                {% for m in loaded_models %}
+                <div class="bg-gray-900 rounded p-3 border border-gray-700">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-mono text-gray-100">{{ m.identifier }}</span>
+                        <span class="text-xs px-2 py-0.5 rounded {% if m.status == "IDLE" %}bg-green-900 text-green-300{% else %}bg-yellow-900 text-yellow-300{% endif %}">{{ m.status }}</span>
+                    </div>
+                    <div class="flex items-center justify-between mt-1">
+                        <div class="flex gap-4 text-xs text-gray-400">
+                            {% if !m.size.is_empty() %}<span>{{ m.size }}</span>{% endif %}
+                            {% if !m.context.is_empty() %}<span>ctx: {{ m.context }}</span>{% endif %}
+                            {% if !m.device.is_empty() %}<span>{{ m.device }}</span>{% endif %}
+                        </div>
+                        <button onclick="unloadModel('{{ m.identifier }}', this)"
+                            class="text-xs bg-red-700 hover:bg-red-600 px-2 py-0.5 rounded transition"
+                            title="Unload this model from memory">Unload</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Runtime Cards -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <h2 class="text-sm font-semibold text-purple-400 uppercase tracking-wide mb-3" title="Installed inference runtimes">Runtime</h2>
+        {% if runtimes.is_empty() %}
+        <p class="text-gray-500 text-sm italic">No runtimes found</p>
+        {% else %}
+        <div class="space-y-2">
+            {% for rt in runtimes %}
+            <div class="bg-gray-900 rounded p-3 border {% if rt.selected %}border-purple-500{% else %}border-gray-700{% endif %}">
+                <span class="text-xs font-mono text-gray-200">{{ rt.engine }}</span>
+                <div class="flex items-center justify-between mt-1">
+                    <span class="text-xs text-gray-500">{{ rt.format }}</span>
+                    {% if rt.selected %}<span class="text-xs bg-purple-900/50 text-purple-300 border border-purple-700 px-2 py-0.5 rounded">✓ active</span>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Error info card (hidden by default) -->
+<div id="error-card" class="mt-6 hidden">
+    <div class="bg-red-900/30 border border-red-700 rounded-lg p-5">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="text-red-400 text-lg">✗</span>
+            <h3 class="text-sm font-semibold text-red-400 uppercase">Load Error</h3>
+        </div>
+        <p id="error-msg" class="text-sm text-red-200 font-mono"></p>
+        <p class="text-xs text-gray-400 mt-2">Try switching runtime on the <a href="/runtime/status" class="text-blue-400 underline">Runtime page</a>, or check that the model is fully downloaded.</p>
+    </div>
+</div>
+
+<script>
+async function loadModel(name, btn) {
+    document.getElementById('error-card').classList.add('hidden');
+    await apiPost('/models/load', {model_name: name}, btn);
+    document.getElementById('loaded-content').innerHTML = `
+        <div class="bg-gray-900 rounded p-3 border border-yellow-700">
+            <div class="flex items-center gap-2">
+                <span class="spinner"></span>
+                <span class="text-sm text-yellow-300">Loading ${name}...</span>
+            </div>
+        </div>`;
+    pollLoadStatus(name);
+}
+
+async function pollLoadStatus(name) {
+    const interval = setInterval(async () => {
+        try {
+            const resp = await fetch('/models/load/status');
+            const data = await resp.json();
+            if (data.success) {
+                clearInterval(interval);
+                showToast('Model loaded', false);
+                document.getElementById('error-card').classList.add('hidden');
+                refreshLoadedModels();
+                return;
+            }
+            // Check if it's actually a failure (not just still loading)
+            if (data.message.includes('CAUSE') || data.message.includes('error') || data.message.includes('Exit code')) {
+                clearInterval(interval);
+                document.getElementById('error-card').classList.remove('hidden');
+                document.getElementById('error-msg').textContent = data.message.trim();
+                showToast('Load failed', true);
+                refreshLoadedModels();
+            }
+        } catch(e) { clearInterval(interval); }
+    }, 3000);
+}
+async function unloadModel(name, btn) {
+    await apiPost('/models/unload', {model_name: name}, btn);
+    setTimeout(refreshLoadedModels, 2000);
+}
+async function refreshLoadedModels() {
+    try {
+        const resp = await fetch('/');
+        const html = await resp.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newLoaded = doc.getElementById('loaded-content');
+        if (newLoaded) document.getElementById('loaded-content').innerHTML = newLoaded.innerHTML;
+        const newModels = doc.getElementById('available-models');
+        if (newModels) document.getElementById('available-models').innerHTML = newModels.innerHTML;
+    } catch(e) {}
+}
+</script>
+{% endblock %}

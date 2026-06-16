@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Logs — LMS{% endblock %}
+{% block content %}
+<div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-orange-400 uppercase tracking-wide">Logs</h2>
+        <button onclick="refreshPage(this)"
+            title="Refresh logs"
+            class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition">↻ Refresh</button>
+    </div>
+    <!-- Tabs -->
+    <div class="flex items-center gap-2 mb-4">
+        <a href="/logs?q=lms" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "lms" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">LMS Inference</a>
+        <a href="/logs?q=app" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "app" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">App Log</a>
+        <a href="/logs?q=downloads" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "downloads" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">Downloads</a>
+        {% if active_tab == "downloads" && !download_logs.is_empty() %}
+        <select onchange="window.location.href='/logs?q=downloads&dl='+this.value"
+            class="ml-3 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+            {% for log in download_logs %}
+            <option value="{{ log }}" {% if loop.index0 == selected_dl_idx %}selected{% endif %}>{{ log }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+    </div>
+    <div class="bg-gray-900 rounded p-4 border border-gray-700 max-h-[70vh] overflow-y-auto">
+        <pre class="text-gray-300 text-xs">{{ output }}</pre>
+    </div>
+    {% if active_tab == "lms" %}
+    <p class="text-xs text-gray-500 mt-3">
+        ℹ️ Only inference requests appear here (e.g. /v1/chat/completions). Plain /v1/models calls don't generate logs.
+    </p>
+    {% endif %}
+</div>
+{% endblock %}
