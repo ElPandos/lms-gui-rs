@@ -509,6 +509,11 @@ function restoreChatState() {
         Object.entries(charts).forEach(([id, results]) => {
             setTimeout(() => drawChart(results, id), 50);
         });
+        // Sync stCounter to avoid ID collisions with restored charts
+        Object.keys(charts).forEach(id => {
+            const num = parseInt(id.replace('st-chart-', ''));
+            if (num >= stCounter) stCounter = num;
+        });
     }
 }
 
