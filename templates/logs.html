@@ -2,15 +2,27 @@
 {% block title %}Logs — LMS{% endblock %}
 {% block content %}
 <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+    <!-- Header -->
     <div class="flex items-center justify-between mb-3">
         <h2 class="text-sm font-semibold text-orange-400 uppercase tracking-wide">Logs</h2>
-        <button onclick="refreshPage(this)"
-            class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition">↻ Refresh</button>
+        <div class="flex items-center gap-2">
+            <select id="log-refresh-interval" onchange="setLogRefresh()"
+                class="text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200" data-tip="Auto-refresh interval">
+                <option value="0">Auto: off</option>
+                <option value="5">Auto: 5s</option>
+                <option value="10">Auto: 10s</option>
+                <option value="30">Auto: 30s</option>
+            </select>
+            <label class="text-xs text-gray-400 flex items-center gap-1 cursor-pointer" data-tip="Pin to bottom — auto-scroll on refresh">
+                <input type="checkbox" id="log-tail" class="rounded border-gray-600 bg-gray-900" checked> Tail
+            </label>
+            <button onclick="refreshLogs(this)"
+                class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition">↻ Refresh</button>
+        </div>
     </div>
     <!-- Tabs -->
     <div class="flex items-center gap-2 mb-4">
-        <a href="/logs?q=lms" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "lms" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">LMS Inference</a>
-        <a href="/logs?q=app" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "app" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">App Log</a>
+        <a href="/logs?q=app" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "app" || active_tab == "lms" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">App Log</a>
         <a href="/logs?q=downloads" class="text-xs px-3 py-1.5 rounded transition {% if active_tab == "downloads" %}bg-orange-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">Downloads</a>
         {% if active_tab == "downloads" && !download_logs.is_empty() %}
         <select onchange="window.location.href='/logs?q=downloads&dl='+this.value"
@@ -21,13 +33,240 @@
         </select>
         {% endif %}
     </div>
-    <div class="bg-gray-900 rounded p-4 border border-gray-700 max-h-[70vh] overflow-y-auto">
-        <pre class="text-gray-300 text-xs">{{ output }}</pre>
+    <!-- Toolbar row 1: search + level filters -->
+    <div class="flex items-center gap-2 mb-2 flex-wrap">
+        <div class="relative flex-1 min-w-[200px] max-w-md">
+            <input type="text" id="log-filter" placeholder="Filter lines..." oninput="filterLogs()"
+                class="w-full text-xs bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-orange-500 pr-16">
+            <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                <label class="text-[10px] text-gray-500 flex items-center gap-0.5 cursor-pointer" data-tip="Use regex">
+                    <input type="checkbox" id="log-regex" class="rounded border-gray-600 bg-gray-900 w-3 h-3"> .*
+                </label>
+                <button onclick="document.getElementById('log-filter').value='';filterLogs()" class="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+            </div>
+        </div>
+        <!-- Level quick filters -->
+        <div class="flex items-center gap-1">
+            <button onclick="setLevelFilter('all')" id="lvl-all" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600 transition lvl-active">All</button>
+            <button onclick="setLevelFilter('error')" id="lvl-error" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-red-400 hover:bg-gray-600 transition">Error</button>
+            <button onclick="setLevelFilter('warn')" id="lvl-warn" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-yellow-400 hover:bg-gray-600 transition">Warn</button>
+            <button onclick="setLevelFilter('info')" id="lvl-info" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-green-400 hover:bg-gray-600 transition">Info</button>
+            <button onclick="setLevelFilter('debug')" id="lvl-debug" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 transition">Debug</button>
+        </div>
+        <span id="line-count" class="text-xs text-gray-500 ml-auto"></span>
     </div>
-    {% if active_tab == "lms" %}
-    <p class="text-xs text-gray-500 mt-3">
-        ℹ️ Only inference requests appear here (e.g. /v1/chat/completions). Plain /v1/models calls don't generate logs.
-    </p>
-    {% endif %}
+    <!-- Toolbar row 2: toggles + actions -->
+    <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <label class="text-xs text-gray-400 flex items-center gap-1 cursor-pointer" data-tip="Show line numbers">
+            <input type="checkbox" id="log-linenums" onchange="renderLog()" class="rounded border-gray-600 bg-gray-900"> #
+        </label>
+        <label class="text-xs text-gray-400 flex items-center gap-1 cursor-pointer" data-tip="Wrap long lines">
+            <input type="checkbox" id="log-wrap" onchange="toggleWrap()" checked class="rounded border-gray-600 bg-gray-900"> Wrap
+        </label>
+        <label class="text-xs text-gray-400 flex items-center gap-1 cursor-pointer" data-tip="Highlight log levels">
+            <input type="checkbox" id="log-highlight" onchange="renderLog()" checked class="rounded border-gray-600 bg-gray-900"> Color
+        </label>
+        <div class="ml-auto flex items-center gap-2">
+            <button onclick="downloadLog()" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded transition" data-tip="Download as .log file">⬇ Save</button>
+            <button onclick="copyLogs()" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded transition" data-tip="Copy visible log to clipboard">Copy</button>
+            <button onclick="scrollToBottom()" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded transition" data-tip="Jump to latest">⬇ End</button>
+        </div>
+    </div>
+    <!-- Log content -->
+    <div id="log-container" class="bg-gray-900 rounded border border-gray-700 max-h-[65vh] overflow-y-auto overflow-x-auto font-mono text-xs" style="scroll-behavior: smooth;">
+        <div id="log-content" class="p-4 whitespace-pre-wrap text-gray-300"></div>
+    </div>
 </div>
+
+<script>
+const RAW_LOG = {{ output|json|safe }};
+let _logRefreshTimer = null;
+let _levelFilter = 'all';
+
+function getLines() {
+    return RAW_LOG.split('\n');
+}
+
+function matchesLevel(line, level) {
+    const lower = line.toLowerCase();
+    if (level === 'error') return lower.includes('error') || lower.includes('fatal') || lower.includes('panic');
+    if (level === 'warn') return lower.includes('warn');
+    if (level === 'info') return lower.includes('info') || lower.includes('200') || lower.includes('success');
+    if (level === 'debug') return lower.includes('debug') || lower.includes('trace');
+    return true;
+}
+
+function setLevelFilter(level) {
+    _levelFilter = level;
+    document.querySelectorAll('[id^=lvl-]').forEach(b => b.classList.remove('lvl-active', 'ring-1', 'ring-gray-400'));
+    document.getElementById('lvl-' + level).classList.add('lvl-active', 'ring-1', 'ring-gray-400');
+    renderLog();
+}
+
+function renderLog() {
+    const filterText = document.getElementById('log-filter').value;
+    const useRegex = document.getElementById('log-regex').checked;
+    const showNums = document.getElementById('log-linenums').checked;
+    const highlight = document.getElementById('log-highlight').checked;
+    const lines = getLines();
+    let filtered = [];
+    let lineNums = [];
+
+    let filterRegex = null;
+    if (filterText && useRegex) {
+        try { filterRegex = new RegExp(filterText, 'i'); } catch(e) { filterRegex = null; }
+    }
+    const filterLower = filterText.toLowerCase();
+
+    for (let i = 0; i < lines.length; i++) {
+        // Level filter
+        if (_levelFilter !== 'all' && !matchesLevel(lines[i], _levelFilter)) continue;
+        // Text filter
+        if (filterText) {
+            if (useRegex && filterRegex) {
+                if (!filterRegex.test(lines[i])) continue;
+            } else {
+                if (!lines[i].toLowerCase().includes(filterLower)) continue;
+            }
+        }
+        filtered.push(lines[i]);
+        lineNums.push(i + 1);
+    }
+
+    const el = document.getElementById('log-content');
+    if (!highlight) {
+        const text = showNums
+            ? filtered.map((l, i) => `<span class="text-gray-600 select-none">${String(lineNums[i]).padStart(4)}</span> ${escapeHtml(l)}`).join('\n')
+            : escapeHtml(filtered.join('\n'));
+        el.innerHTML = text;
+    } else {
+        el.innerHTML = filtered.map((line, i) => {
+            const prefix = showNums ? `<span class="text-gray-600 select-none">${String(lineNums[i]).padStart(4)}</span> ` : '';
+            const lower = line.toLowerCase();
+            if (lower.includes('error') || lower.includes('fatal') || lower.includes('panic')) {
+                return prefix + `<span class="text-red-400">${escapeHtml(line)}</span>`;
+            } else if (lower.includes('warn')) {
+                return prefix + `<span class="text-yellow-400">${escapeHtml(line)}</span>`;
+            } else if (lower.includes('info') || lower.includes('200') || lower.includes('success')) {
+                return prefix + `<span class="text-green-400/70">${escapeHtml(line)}</span>`;
+            } else if (lower.includes('debug') || lower.includes('trace')) {
+                return prefix + `<span class="text-gray-500">${escapeHtml(line)}</span>`;
+            }
+            return prefix + escapeHtml(line);
+        }).join('\n');
+    }
+
+    // Highlight search matches
+    if (filterText) {
+        let regex;
+        if (useRegex && filterRegex) {
+            regex = new RegExp(`(${filterText})`, 'gi');
+        } else {
+            regex = new RegExp(`(${filterText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        }
+        el.innerHTML = el.innerHTML.replace(regex, '<mark class="bg-yellow-700/50 text-yellow-200 rounded px-0.5">$1</mark>');
+    }
+
+    document.getElementById('line-count').textContent = `${filtered.length}/${lines.length} lines`;
+
+    // Tail mode: auto-scroll to bottom
+    if (document.getElementById('log-tail').checked) {
+        setTimeout(scrollToBottom, 10);
+    }
+}
+
+function filterLogs() { renderLog(); }
+
+function toggleWrap() {
+    const el = document.getElementById('log-content');
+    el.classList.toggle('whitespace-pre-wrap', document.getElementById('log-wrap').checked);
+    el.classList.toggle('whitespace-pre', !document.getElementById('log-wrap').checked);
+    saveLogSettings();
+}
+
+function scrollToBottom() {
+    const el = document.getElementById('log-container');
+    el.scrollTop = el.scrollHeight;
+}
+
+function copyLogs() {
+    const el = document.getElementById('log-content');
+    navigator.clipboard.writeText(el.textContent).then(() => showToast('Copied to clipboard', false)).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = el.textContent;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Copied to clipboard', false);
+    });
+}
+
+function downloadLog() {
+    const el = document.getElementById('log-content');
+    const blob = new Blob([el.textContent], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `lms-log-{{ active_tab }}-${new Date().toISOString().slice(0,19).replace(/[T:]/g,'-')}.log`;
+    a.click();
+    showToast('Downloaded', false);
+}
+
+function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function refreshLogs(btn) {
+    if (btn) { btn.classList.add('btn-loading'); btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; }
+    location.reload();
+}
+
+function setLogRefresh() {
+    if (_logRefreshTimer) { clearInterval(_logRefreshTimer); _logRefreshTimer = null; }
+    const sec = parseInt(document.getElementById('log-refresh-interval').value);
+    if (sec > 0) {
+        _logRefreshTimer = setInterval(() => location.reload(), sec * 1000);
+    }
+    saveLogSettings();
+}
+
+// Settings persistence
+function saveLogSettings() {
+    const settings = {
+        'log-refresh-interval': document.getElementById('log-refresh-interval').value,
+        'log-linenums': document.getElementById('log-linenums').checked,
+        'log-wrap': document.getElementById('log-wrap').checked,
+        'log-highlight': document.getElementById('log-highlight').checked,
+        'log-tail': document.getElementById('log-tail').checked,
+    };
+    fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'logs_settings', value: JSON.stringify(settings) }) });
+}
+async function loadLogSettings() {
+    try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        const entry = data.find(([k]) => k === 'logs_settings');
+        if (entry) {
+            const s = JSON.parse(entry[1]);
+            if (s['log-refresh-interval']) document.getElementById('log-refresh-interval').value = s['log-refresh-interval'];
+            if (s['log-linenums'] !== undefined) document.getElementById('log-linenums').checked = s['log-linenums'];
+            if (s['log-wrap'] !== undefined) document.getElementById('log-wrap').checked = s['log-wrap'];
+            if (s['log-highlight'] !== undefined) document.getElementById('log-highlight').checked = s['log-highlight'];
+            if (s['log-tail'] !== undefined) document.getElementById('log-tail').checked = s['log-tail'];
+            toggleWrap();
+            setLogRefresh();
+        }
+    } catch(e) {}
+}
+
+// Save on checkbox/setting changes
+['log-linenums','log-wrap','log-highlight','log-tail'].forEach(id => {
+    document.getElementById(id).addEventListener('change', saveLogSettings);
+});
+
+// Init
+loadLogSettings().then(() => {
+    renderLog();
+});
+</script>
 {% endblock %}

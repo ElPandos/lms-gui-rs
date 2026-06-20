@@ -8,6 +8,7 @@ use crate::AppState;
 // JSON API endpoints
 /// JSON API: list all models from LMS.
 pub async fn api_models(State(state): State<AppState>) -> Json<Vec<Model>> {
+    tracing::debug!("API: list models");
     let mut s = state.stats.write().await;
     s.record_api_call("api_models");
     drop(s);
@@ -16,6 +17,7 @@ pub async fn api_models(State(state): State<AppState>) -> Json<Vec<Model>> {
 
 /// JSON API: currently loaded models.
 pub async fn api_loaded_models(State(state): State<AppState>) -> Json<serde_json::Value> {
+    tracing::debug!("API: loaded models");
     let mut s = state.stats.write().await;
     s.record_api_call("api_loaded_models");
     drop(s);
@@ -49,9 +51,13 @@ pub struct SettingRequest {
 
 /// JSON API: save a key-value setting.
 pub async fn api_set_setting(State(state): State<AppState>, Json(req): Json<SettingRequest>) -> Json<CommandResult> {
+    tracing::debug!(key = %req.key, "API: save setting");
     match state.db.set_setting(&req.key, &req.value) {
         Ok(()) => Json(CommandResult { success: true, message: "Saved".to_string() }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(key = %req.key, error = %e, "Failed to save setting");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -74,17 +80,25 @@ pub struct ChatSaveRequest {
 
 /// JSON API: persist a chat message.
 pub async fn api_chat_save(State(state): State<AppState>, Json(req): Json<ChatSaveRequest>) -> Json<CommandResult> {
+    tracing::debug!(role = %req.role, model = %req.model, "API: save chat message");
     match state.db.save_chat_message(&req.role, &req.model, &req.content, req.settings_json.as_deref(), req.response_json.as_deref(), req.duration_ms, req.tokens) {
         Ok(_) => Json(CommandResult { success: true, message: "Saved".to_string() }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to save chat message");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
 /// JSON API: clear all chat history.
 pub async fn api_chat_clear(State(state): State<AppState>) -> Json<CommandResult> {
+    tracing::info!("API: clear chat history");
     match state.db.clear_chat_history() {
         Ok(()) => Json(CommandResult { success: true, message: "Cleared".to_string() }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to clear chat history");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -102,9 +116,13 @@ pub struct TestSaveRequest {
 
 /// JSON API: save a speed test result.
 pub async fn api_test_save(State(state): State<AppState>, Json(req): Json<TestSaveRequest>) -> Json<CommandResult> {
+    tracing::debug!(test_type = %req.test_type, model = %req.model, "API: save test result");
     match state.db.save_test_result(&req.test_type, &req.model, req.num_calls, req.max_tokens, req.sigma, &req.results_json, &req.stats_json) {
         Ok(_) => Json(CommandResult { success: true, message: "Saved".to_string() }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to save test result");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -113,15 +131,28 @@ pub async fn api_test_history(State(state): State<AppState>) -> Json<serde_json:
     Json(serde_json::json!(state.db.get_test_results(50)))
 }
 
+/// JSON API: reset all traffic stats counters.
+pub async fn api_stats_reset(State(state): State<AppState>) -> Json<CommandResult> {
+    tracing::info!("API: resetting traffic stats");
+    let mut s = state.stats.write().await;
+    s.reset();
+    Json(CommandResult { success: true, message: "Stats reset".to_string() })
+}
+
 /// JSON API: export all database data.
 pub async fn api_export(State(state): State<AppState>) -> Json<serde_json::Value> {
+    tracing::info!("API: exporting all data");
     Json(state.db.export_all())
 }
 
 /// JSON API: import data from a previous export.
 pub async fn api_import(State(state): State<AppState>, Json(data): Json<serde_json::Value>) -> Json<CommandResult> {
+    tracing::info!("API: importing data");
     match state.db.import_all(&data) {
         Ok(()) => Json(CommandResult { success: true, message: "Imported".to_string() }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(error = %e, "Data import failed");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }

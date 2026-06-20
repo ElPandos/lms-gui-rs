@@ -42,7 +42,7 @@ impl LmsClient {
         let local_mode = std::env::var("LMS_LOCAL").unwrap_or_default() == "1";
 
         if !local_mode {
-            // Start SSH ControlMaster in background
+            tracing::info!("Establishing SSH ControlMaster connection");
             let _ = Command::new("ssh")
                 .args([
                     "-o", "ControlMaster=auto",
@@ -55,9 +55,7 @@ impl LmsClient {
                 .spawn();
         }
 
-        if local_mode {
-            tracing::info!("Running in LOCAL mode (no SSH)");
-        }
+        tracing::info!(local_mode, base_url = %base_url, "LmsClient initialized");
 
         Self {
             base_url,
@@ -68,17 +66,25 @@ impl LmsClient {
 
     /// Fetch the model list from the LMS REST API.
     pub async fn list_models(&self) -> Result<Vec<Model>, String> {
+        tracing::debug!("Fetching model list from LMS API");
         let resp = self.client
             .get(format!("{}/v1/models", self.base_url))
             .send()
             .await
-            .map_err(|e| format!("Failed to connect to LMS: {}", e))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to connect to LMS API");
+                format!("Failed to connect to LMS: {}", e)
+            })?;
 
         let body: ModelsResponse = resp
             .json()
             .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to parse LMS models response");
+                format!("Failed to parse response: {}", e)
+            })?;
 
+        tracing::debug!(count = body.data.len(), "Fetched models from API");
         Ok(body.data)
     }
 
@@ -95,6 +101,7 @@ impl LmsClient {
     /// Start a background model download via `lms get`.
     pub async fn download_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
+        tracing::info!(model = %safe_name, "Starting model download");
         let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
         // Kill any existing download for this model before starting fresh
         let _ = self.run_cmd(&format!("pkill -f 'lms get {}' 2>/dev/null; rm -f {}", safe_name, log_file)).await;
@@ -107,6 +114,7 @@ impl LmsClient {
     /// Unload and delete a model from disk.
     pub async fn delete_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
+        tracing::warn!(model = %safe_name, "Deleting model from disk");
         // Model name like "google/gemma-4-e2b" → search for directory containing "gemma-4-e2b"
         let search_part = safe_name.split('/').next_back().unwrap_or(&safe_name);
         self.run_cmd(&format!(
@@ -128,9 +136,16 @@ impl LmsClient {
         self.run_cmd(&format!("lms runtime select {}", safe_name)).await
     }
 
+    /// Apply pending runtime updates.
+    pub async fn update_runtime(&self) -> Result<String, String> {
+        self.run_cmd("lms runtime update --apply 2>&1 || lms runtime update -y 2>&1").await
+    }
+
+
     /// Load a model into GPU memory in the background.
     pub async fn load_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
+        tracing::info!(model = %safe_name, "Loading model into GPU memory");
         self.run_cmd(&format!(
             "(lms load {} --gpu max -y > /tmp/lms-load.log 2>&1 &) && echo 'Loading started'",
             safe_name
@@ -144,6 +159,7 @@ impl LmsClient {
 
     /// Unload a model (or all models with `--all`) from memory.
     pub async fn unload_model(&self, name: &str) -> Result<String, String> {
+        tracing::info!(model = %name, "Unloading model");
         if name == "--all" {
             self.run_cmd("lms unload --all").await
         } else {
@@ -206,7 +222,7 @@ impl LmsClient {
 
     /// Stream recent LMS inference logs.
     pub async fn recent_logs(&self) -> Result<String, String> {
-        self.run_cmd("timeout 3 lms log stream 2>&1; true").await
+        self.run_cmd("timeout 5 lms log stream 2>&1; true").await
     }
 
     /// Query current GPU memory usage via `nvidia-smi`.
@@ -214,9 +230,9 @@ impl LmsClient {
         self.run_cmd("nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | awk -F', ' '{u+=$1;t+=$2} END{printf \"%dG / %dG\", u/1024, t/1024}'").await
     }
 
-    /// Read the last 100 lines of the application log.
+    /// Read the last 500 lines of the application log.
     pub async fn app_log(&self) -> Result<String, String> {
-        self.run_cmd("tail -100 /home/hts/lms-gui-rs/lms-gui-rs.log 2>/dev/null || echo 'No app log'").await
+        self.run_cmd("tail -500 $HOME/lms-gui-rs/lms-gui-rs.log* 2>/dev/null | tail -500 || echo 'No app log'").await
     }
 
     /// List available download log file names.
@@ -238,6 +254,7 @@ impl LmsClient {
 
     /// Send a chat completion request to the LMS API.
     pub async fn chat_completion(&self, req: &crate::handlers::ChatRequest) -> Result<(String, u32), String> {
+        tracing::debug!(model = %req.model, temperature = req.temperature, max_tokens = req.max_tokens, "Sending chat completion request");
         let mut messages = Vec::new();
         if let Some(ref sys) = req.system_prompt {
             if !sys.is_empty() {
@@ -269,12 +286,18 @@ impl LmsClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Request failed: {}", e))?;
+            .map_err(|e| {
+                tracing::error!(model = %req.model, error = %e, "Chat completion request failed");
+                format!("Request failed: {}", e)
+            })?;
 
         let data: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| format!("Parse error: {}", e))?;
+            .map_err(|e| {
+                tracing::error!(model = %req.model, error = %e, "Chat completion parse error");
+                format!("Parse error: {}", e)
+            })?;
 
         let content = data["choices"][0]["message"]["content"]
             .as_str()
@@ -292,6 +315,7 @@ impl LmsClient {
     }
 
     async fn run_cmd(&self, cmd: &str) -> Result<String, String> {
+        tracing::debug!(cmd = %cmd, local = self.local_mode, "Executing command");
         let local_mode = self.local_mode;
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(20),
@@ -319,18 +343,30 @@ impl LmsClient {
             }),
         )
         .await
-        .map_err(|_| "Command timed out after 20s".to_string())?
-        .map_err(|e| format!("Task join error: {}", e))?
-        .map_err(|e| format!("Command error: {}", e))?;
+        .map_err(|_| {
+            tracing::error!(cmd = %cmd, "Command timed out after 20s");
+            "Command timed out after 20s".to_string()
+        })?
+        .map_err(|e| {
+            tracing::error!(cmd = %cmd, error = %e, "Task join error");
+            format!("Task join error: {}", e)
+        })?
+        .map_err(|e| {
+            tracing::error!(cmd = %cmd, error = %e, "Command execution error");
+            format!("Command error: {}", e)
+        })?;
 
         if result.status.success() {
+            tracing::debug!(cmd = %cmd, "Command completed successfully");
             Ok(strip_ansi(&String::from_utf8_lossy(&result.stdout)))
         } else {
             let stderr = String::from_utf8_lossy(&result.stderr).to_string();
             let stdout = String::from_utf8_lossy(&result.stdout).to_string();
             if !stdout.is_empty() {
+                tracing::debug!(cmd = %cmd, "Command returned non-zero but has stdout");
                 Ok(strip_ansi(&stdout))
             } else {
+                tracing::warn!(cmd = %cmd, stderr = %stderr, "Command failed");
                 Err(format!("Command failed: {}", stderr))
             }
         }

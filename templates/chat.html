@@ -669,7 +669,6 @@ async function runAllModelsTest(scope) {
     const maxTokens = parseInt(document.getElementById('st-max-tokens').value);
     const testType = document.getElementById('st-type').value;
 
-    // Get models based on scope
     const select = document.getElementById('chat-model');
     let models;
     if (scope === 'loaded') {
@@ -679,110 +678,144 @@ async function runAllModelsTest(scope) {
     }
     if (models.length === 0) { showToast('No models to test', true); btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test'; return; }
 
+    // AbortController for immediate cancellation
+    window._testAbort = new AbortController();
+    const signal = window._testAbort.signal;
+    // Prevent accidental navigation during test
+    window._testRunning = true;
+    window.onbeforeunload = () => 'A multi-model test is running. Leaving will abort it.';
+
     const scopeLabel = scope === 'loaded' ? 'loaded models' : 'all available models';
     appendMessage('assistant', `<div class="flex items-center justify-between"><div><span class="text-purple-400">🏆 Testing ${scopeLabel}:</span> ${models.length} models, ${numCalls} calls each, type=${testType}</div><button onclick="cancelAllModelsTest()" id="cancel-test-btn" class="text-xs bg-red-800 hover:bg-red-700 px-3 py-1 rounded transition shrink-0">✕ Cancel</button></div><div id="test-progress" class="text-gray-400 mt-1"><span class="spinner"></span> Preparing... <span id="test-eta"></span></div>`, {});
 
-    // Remember originally loaded models to restore later
     const originallyLoaded = [...select.options].filter(o => o.text.includes('● loaded')).map(o => o.value);
     const progressEl = document.getElementById('test-progress');
-    const etaEl = document.getElementById('test-eta');
     const estPerModel = scope === 'loaded' ? numCalls * 1.5 + 3 : numCalls * 1.5 + 20;
-    window._testCancelled = false;
 
-    // Live countdown
     let totalRemaining = Math.round(models.length * estPerModel);
     const etaTimer = setInterval(() => {
         if (totalRemaining > 0) totalRemaining--;
-        const etaEl = document.getElementById('test-eta');
-        if (etaEl) etaEl.textContent = `ETA ~${totalRemaining}s`;
+        const el = document.getElementById('test-eta');
+        if (el) el.textContent = `ETA ~${totalRemaining}s`;
     }, 1000);
 
+    // Abortable fetch helper
+    const afetch = (url, opts = {}) => fetch(url, { ...opts, signal });
+    // Abortable sleep
+    const asleep = (ms) => new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, ms);
+        signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+    });
+
     const allResults = [];
-    for (let mi = 0; mi < models.length; mi++) {
-        if (window._testCancelled) break;
-        const model = models[mi];
-        if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Unloading all → Loading <span class="text-white font-mono">${model}</span>... <span id="test-eta">ETA ~${Math.round((models.length - mi) * estPerModel)}s</span>`;
+    try {
+        for (let mi = 0; mi < models.length; mi++) {
+            const model = models[mi];
+            if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Unloading all → Loading <span class="text-white font-mono">${model}</span>... <span id="test-eta">ETA ~${Math.round((models.length - mi) * estPerModel)}s</span>`;
 
-        // Unload all models first to free VRAM
-        await fetch('/models/unload', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: '--all'}) });
-        await new Promise(r => setTimeout(r, 3000));
+            await afetch('/models/unload', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: '--all'}) });
+            await asleep(3000);
 
-        if (window._testCancelled) break;
+            await afetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
 
-        // Load test model and wait for it to be ready
-        await fetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
-        // Poll until model is loaded (max 60s)
-        for (let w = 0; w < 30; w++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const ps = await fetch('/api/models/loaded').then(r => r.json());
-            if (ps.output && ps.output.includes(model.split('/').pop())) break;
-            if (window._testCancelled) break;
-        }
-        if (window._testCancelled) break;
+            // Poll until model is loaded (max 60s)
+            for (let w = 0; w < 30; w++) {
+                await asleep(2000);
+                const ps = await afetch('/api/models/loaded').then(r => r.json());
+                if (ps.output && ps.output.includes(model.split('/').pop())) break;
+            }
 
-        // Warmup call
-        await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, message: 'warmup', temperature: 0, max_tokens: 16 }) });
+            // Warmup
+            await afetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, message: 'warmup', temperature: 0, max_tokens: 16 }) });
 
-        if (window._testCancelled) break;
-        if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Testing <span class="text-white font-mono">${model}</span>... <span id="test-eta">ETA ~${Math.round((models.length - mi) * estPerModel)}s</span>`;
+            if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Testing <span class="text-white font-mono">${model}</span>... <span id="test-eta">ETA ~${Math.round((models.length - mi) * estPerModel)}s</span>`;
 
-        try {
-            const resp = await fetch('/chat/speedtest', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, num_calls: numCalls, sigma, max_tokens: maxTokens }) });
+            const resp = await afetch('/chat/speedtest', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, num_calls: numCalls, sigma, max_tokens: maxTokens }) });
             const data = await resp.json();
             allResults.push({ model, stats: data.stats, results: data.results });
-        } catch(e) {
-            allResults.push({ model, stats: { mean_ms: 99999, filtered_mean_ms: 99999, min_ms: 0, max_ms: 0, std_dev_ms: 0 }, results: [] });
         }
-
-        // Unload model after test (free VRAM for next model) - handled at start of next iteration
-        if (mi < models.length - 1) {
-            if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Done with <span class="text-white font-mono">${model}</span>, next...`;
+    } catch(e) {
+        if (e.name === 'AbortError') {
+            // Cancelled — fall through to cleanup
+        } else {
+            allResults.push({ model: 'unknown', stats: { mean_ms: 99999, filtered_mean_ms: 99999, min_ms: 0, max_ms: 0, std_dev_ms: 0 }, results: [] });
         }
     }
 
-    // Restore originally loaded models
+    // Cleanup: restore original models (use fresh fetches, not abortable)
     clearInterval(etaTimer);
     if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> Restoring original models...`;
-    await fetch('/models/unload', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: '--all'}) });
-    await new Promise(r => setTimeout(r, 2000));
-    // Then reload the originally loaded ones
-    for (const model of originallyLoaded) {
-        await fetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
-    }
+    try {
+        await fetch('/models/unload', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: '--all'}) });
+        await new Promise(r => setTimeout(r, 2000));
+        for (const model of originallyLoaded) {
+            await fetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
+        }
+    } catch(e) {}
 
     // Remove running message
     const container = document.getElementById('chat-messages');
     const last = container.lastElementChild; if (last) last.remove();
+    // Clear navigation guard
+    window._testRunning = false;
+    window.onbeforeunload = null;
 
-    if (window._testCancelled && allResults.length === 0) {
+    if (allResults.length === 0) {
         appendMessage('assistant', `<span class="text-red-400">Test cancelled. Models restored.</span>`, {});
         btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
         return;
     }
 
-    // Rank by filtered mean (or mean if no filter)
-    allResults.sort((a, b) => (a.stats.filtered_mean_ms || a.stats.mean_ms) - (b.stats.filtered_mean_ms || b.stats.mean_ms));
+    // Compute throughput for each model
+    const isThroughput = testType === 'throughput';
+    if (isThroughput) {
+        allResults.forEach(r => {
+            const tokPerSec = r.results.map(c => c.tokens > 0 ? c.tokens / (c.duration_ms / 1000) : 0);
+            const valid = tokPerSec.filter(t => t > 0);
+            r.throughput = valid.length ? valid.reduce((a,b) => a+b, 0) / valid.length : 0;
+            // Filtered (non-outlier)
+            const filtered = r.results.filter(c => !c.outlier).map(c => c.tokens > 0 ? c.tokens / (c.duration_ms / 1000) : 0).filter(t => t > 0);
+            r.filteredThroughput = filtered.length ? filtered.reduce((a,b) => a+b, 0) / filtered.length : r.throughput;
+            const maxT = Math.max(...tokPerSec.filter(t => t > 0), 0);
+            const minT = Math.min(...tokPerSec.filter(t => t > 0), 99999);
+            r.maxThroughput = maxT;
+            r.minThroughput = minT === 99999 ? 0 : minT;
+        });
+        allResults.sort((a, b) => b.filteredThroughput - a.filteredThroughput); // Higher is better
+    } else {
+        allResults.sort((a, b) => (a.stats.filtered_mean_ms || a.stats.mean_ms) - (b.stats.filtered_mean_ms || b.stats.mean_ms));
+    }
     const best = allResults[0];
 
-    let reportHtml = `<div class="text-purple-400 font-semibold mb-2">🏆 All Models Report</div>
-        <div class="text-xs text-gray-300 mb-2">${numCalls} calls per model · max_tokens=${maxTokens} · σ=${sigma}</div>
-        <table class="w-full text-xs"><thead><tr class="text-gray-400 border-b border-gray-700"><th class="text-left py-1">#</th><th class="text-left py-1">Model</th><th class="text-right py-1">Mean</th><th class="text-right py-1">Filtered</th><th class="text-right py-1">Min</th><th class="text-right py-1">Max</th><th class="text-right py-1">StdDev</th></tr></thead><tbody>`;
+    let reportHtml = `<div class="text-purple-400 font-semibold mb-2">🏆 ${signal.aborted ? 'Partial' : 'All Models'} Report</div>
+        <div class="text-xs text-gray-300 mb-2">${numCalls} calls per model · max_tokens=${maxTokens} · σ=${sigma}${signal.aborted ? ` · <span class="text-yellow-400">cancelled after ${allResults.length}/${models.length} models</span>` : ''}</div>`;
 
-    allResults.forEach((r, i) => {
-        const highlight = i === 0 ? 'text-green-400 font-semibold' : 'text-gray-300';
-        reportHtml += `<tr class="border-b border-gray-700/30 ${highlight}"><td class="py-1">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i+1}</td><td class="py-1 font-mono">${r.model}</td><td class="text-right py-1">${r.stats.mean_ms.toFixed(0)}ms</td><td class="text-right py-1">${r.stats.filtered_mean_ms.toFixed(0)}ms</td><td class="text-right py-1">${r.stats.min_ms}ms</td><td class="text-right py-1">${r.stats.max_ms}ms</td><td class="text-right py-1">${r.stats.std_dev_ms.toFixed(0)}ms</td></tr>`;
-    });
-    reportHtml += `</tbody></table>`;
-    reportHtml += `<div class="mt-3 p-2 bg-green-900/30 border border-green-700 rounded text-xs text-green-300">🏆 Winner: <strong>${best.model}</strong> — ${best.stats.filtered_mean_ms.toFixed(1)}ms avg (filtered)</div>`;
+    if (isThroughput) {
+        reportHtml += `<table class="w-full text-xs"><thead><tr class="text-gray-400 border-b border-gray-700"><th class="text-left py-1">#</th><th class="text-left py-1">Model</th><th class="text-right py-1">Avg tok/s</th><th class="text-right py-1">Filtered</th><th class="text-right py-1">Min</th><th class="text-right py-1">Max</th><th class="text-right py-1">Latency</th></tr></thead><tbody>`;
+        allResults.forEach((r, i) => {
+            const highlight = i === 0 ? 'text-green-400 font-semibold' : 'text-gray-300';
+            reportHtml += `<tr class="border-b border-gray-700/30 ${highlight}"><td class="py-1">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i+1}</td><td class="py-1 font-mono">${r.model}</td><td class="text-right py-1">${r.throughput.toFixed(1)}</td><td class="text-right py-1">${r.filteredThroughput.toFixed(1)}</td><td class="text-right py-1">${r.minThroughput.toFixed(1)}</td><td class="text-right py-1">${r.maxThroughput.toFixed(1)}</td><td class="text-right py-1">${r.stats.mean_ms.toFixed(0)}ms</td></tr>`;
+        });
+        reportHtml += `</tbody></table>`;
+        reportHtml += `<div class="mt-3 p-2 bg-green-900/30 border border-green-700 rounded text-xs text-green-300">🏆 Winner: <strong>${best.model}</strong> — ${best.filteredThroughput.toFixed(1)} tok/s (filtered)</div>`;
+    } else {
+        reportHtml += `<table class="w-full text-xs"><thead><tr class="text-gray-400 border-b border-gray-700"><th class="text-left py-1">#</th><th class="text-left py-1">Model</th><th class="text-right py-1">Mean</th><th class="text-right py-1">Filtered</th><th class="text-right py-1">Min</th><th class="text-right py-1">Max</th><th class="text-right py-1">StdDev</th></tr></thead><tbody>`;
+        allResults.forEach((r, i) => {
+            const highlight = i === 0 ? 'text-green-400 font-semibold' : 'text-gray-300';
+            reportHtml += `<tr class="border-b border-gray-700/30 ${highlight}"><td class="py-1">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i+1}</td><td class="py-1 font-mono">${r.model}</td><td class="text-right py-1">${r.stats.mean_ms.toFixed(0)}ms</td><td class="text-right py-1">${r.stats.filtered_mean_ms.toFixed(0)}ms</td><td class="text-right py-1">${r.stats.min_ms}ms</td><td class="text-right py-1">${r.stats.max_ms}ms</td><td class="text-right py-1">${r.stats.std_dev_ms.toFixed(0)}ms</td></tr>`;
+        });
+        reportHtml += `</tbody></table>`;
+        reportHtml += `<div class="mt-3 p-2 bg-green-900/30 border border-green-700 rounded text-xs text-green-300">🏆 Winner: <strong>${best.model}</strong> — ${best.stats.filtered_mean_ms.toFixed(1)}ms avg (filtered)</div>`;
+    }
 
     appendMessage('assistant', reportHtml, {});
     btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
 }
 
-async function cancelAllModelsTest() {
-    window._testCancelled = true;
+function cancelAllModelsTest() {
+    if (window._testAbort) window._testAbort.abort();
     const cancelBtn = document.getElementById('cancel-test-btn');
-    if (cancelBtn) cancelBtn.textContent = 'Cancelling...';
+    if (cancelBtn) { cancelBtn.textContent = 'Cancelling...'; cancelBtn.disabled = true; }
 }
 
 function toggleManualCalls() {

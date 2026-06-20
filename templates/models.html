@@ -97,7 +97,18 @@
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700" id="local-disk-section">
         <div class="flex items-center justify-between mb-2">
             <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide" data-tip="Models stored on the server's local disk">Local Disk (lms ls)</h2>
-            <span class="text-xs text-gray-500 font-mono">~/.lmstudio/models/</span>
+            <div class="flex items-center gap-2">
+                <select id="disk-refresh-interval" onchange="setDiskRefreshInterval()"
+                    class="text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200" data-tip="Auto-refresh interval">
+                    <option value="0">Auto: off</option>
+                    <option value="5">Auto: 5s</option>
+                    <option value="10">Auto: 10s</option>
+                    <option value="15">Auto: 15s</option>
+                </select>
+                <button onclick="refreshLocalDisk(this)" id="disk-refresh-btn"
+                    class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition">↻ Refresh</button>
+                <span class="text-xs text-gray-500 font-mono">~/.lmstudio/models/</span>
+            </div>
         </div>
         {% if !disk_summary.is_empty() || !disk_total.is_empty() %}
         <p class="text-xs text-gray-400 mb-3">{{ disk_summary }}{% if !disk_total.is_empty() %} — Disk: {{ disk_total }} (total/free){% endif %}</p>
@@ -146,6 +157,33 @@ function showSearchSpinner() {
     btn.classList.add('btn-loading');
     btn.innerHTML = '<span class="spinner"></span> Searching...';
 }
+
+// Restore last search if returning to models page without a query
+(async function() {
+    const url = new URL(location.href);
+    if (url.searchParams.has('q')) {
+        const q = url.searchParams.get('q');
+        const source = url.searchParams.get('source') || 'lms';
+        if (q) {
+            // Page has a query — save it for restoration later
+            fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'models_last_search', value: JSON.stringify({ q, source }) }) });
+        } else {
+            // Empty query — clear saved
+            fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'models_last_search', value: '' }) });
+        }
+        return;
+    }
+    // No query param — try to restore
+    try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        const entry = data.find(([k]) => k === 'models_last_search');
+        if (entry && entry[1]) {
+            const { q, source } = JSON.parse(entry[1]);
+            if (q) location.replace(`/models?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source || 'lms')}`);
+        }
+    } catch(e) {}
+})();
 
 // Extract parameter count from model name (e.g. "7b", "13B", "70b")
 function extractParams(name) {
@@ -384,7 +422,8 @@ async function startDownload(name, btn) {
     }
 }
 
-async function refreshLocalDisk() {
+async function refreshLocalDisk(btn) {
+    if (btn && btn.classList) { btn.classList.add('btn-loading'); btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; }
     try {
         const resp = await fetch('/models');
         const html = await resp.text();
@@ -392,9 +431,62 @@ async function refreshLocalDisk() {
         const doc = parser.parseFromString(html, 'text/html');
         const newSection = doc.getElementById('local-disk-section');
         if (newSection) {
-            document.getElementById('local-disk-section').innerHTML = newSection.innerHTML;
+            // Preserve the header (with refresh controls) and replace only the table content
+            const oldTable = document.querySelector('#local-disk-section .overflow-x-auto') || document.querySelector('#local-disk-section p.italic');
+            const newTable = newSection.querySelector('.overflow-x-auto') || newSection.querySelector('p.italic');
+            const oldSummary = document.querySelector('#local-disk-section > p.text-xs');
+            const newSummary = newSection.querySelector('p.text-xs');
+            if (oldTable && newTable) oldTable.outerHTML = newTable.outerHTML;
+            if (oldSummary && newSummary) oldSummary.outerHTML = newSummary.outerHTML;
         }
     } catch(e) { console.error('refreshLocalDisk failed:', e); }
+    if (btn && btn.classList) { btn.classList.remove('btn-loading'); btn.innerHTML = btn.dataset.orig || '↻ Refresh'; }
 }
+
+// Auto-refresh interval for local disk
+let _diskRefreshTimer = null;
+function setDiskRefreshInterval() {
+    if (_diskRefreshTimer) { clearInterval(_diskRefreshTimer); _diskRefreshTimer = null; }
+    const sec = parseInt(document.getElementById('disk-refresh-interval').value);
+    if (sec > 0) {
+        _diskRefreshTimer = setInterval(() => refreshLocalDisk(), sec * 1000);
+    }
+    saveModelsSettings();
+}
+// Auto-enable refresh when downloads are active
+document.addEventListener('DOMContentLoaded', () => {
+    const active = getActiveDownloads();
+    if (Object.keys(active).length > 0 && document.getElementById('disk-refresh-interval').value === '0') {
+        document.getElementById('disk-refresh-interval').value = '10';
+        setDiskRefreshInterval();
+    }
+});
+
+// Settings persistence
+const MODELS_SETTING_IDS = ['max-params-filter', 'disk-refresh-interval'];
+function saveModelsSettings() {
+    const settings = {};
+    MODELS_SETTING_IDS.forEach(id => { const el = document.getElementById(id); if (el) settings[id] = el.value; });
+    fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'models_settings', value: JSON.stringify(settings) }) });
+}
+async function loadModelsSettings() {
+    try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        const entry = data.find(([k]) => k === 'models_settings');
+        if (entry) {
+            const settings = JSON.parse(entry[1]);
+            Object.entries(settings).forEach(([id, val]) => {
+                const el = document.getElementById(id);
+                if (el) el.value = val;
+            });
+            filterByParams();
+            setDiskRefreshInterval();
+        }
+    } catch(e) {}
+}
+loadModelsSettings();
+// Save on filter change
+document.getElementById('max-params-filter').addEventListener('change', saveModelsSettings);
 </script>
 {% endblock %}

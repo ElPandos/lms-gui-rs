@@ -35,16 +35,22 @@ struct ModelsTemplate {
 struct RuntimeTemplate {
     runtimes: Vec<RuntimeEntry>,
     update_status: String,
+    cuda_version: String,
+    nvidia_driver: String,
+    gpu: String,
 }
 
 #[derive(Template)]
 #[template(path = "stats.html")]
 struct StatsTemplate {
     stats: TrafficStats,
+    uptime: String,
+    rate_per_min: u64,
 }
 
 /// Render the main dashboard with loaded models, runtimes, and host info.
 pub async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
+    tracing::debug!("Rendering dashboard");
     let mut s = state.stats.write().await;
     s.record_request();
     drop(s);
@@ -137,6 +143,7 @@ pub async fn download_model(
     State(state): State<AppState>,
     Json(form): Json<DownloadRequest>,
 ) -> Json<CommandResult> {
+    tracing::info!(model = %form.model_name, "Download model request");
     let mut s = state.stats.write().await;
     s.record_download(&form.model_name);
     drop(s);
@@ -156,13 +163,17 @@ pub async fn load_model(
     State(state): State<AppState>,
     Json(form): Json<DownloadRequest>,
 ) -> Json<CommandResult> {
+    tracing::info!(model = %form.model_name, "Load model request");
     let mut s = state.stats.write().await;
     s.record_api_call(&format!("load:{}", form.model_name));
     drop(s);
 
     match state.lms.load_model(&form.model_name).await {
         Ok(msg) => Json(CommandResult { success: true, message: msg }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(model = %form.model_name, error = %e, "Failed to load model");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -171,13 +182,17 @@ pub async fn unload_model(
     State(state): State<AppState>,
     Json(form): Json<DownloadRequest>,
 ) -> Json<CommandResult> {
+    tracing::info!(model = %form.model_name, "Unload model request");
     let mut s = state.stats.write().await;
     s.record_api_call(&format!("unload:{}", form.model_name));
     drop(s);
 
     match state.lms.unload_model(&form.model_name).await {
         Ok(msg) => Json(CommandResult { success: true, message: msg }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(model = %form.model_name, error = %e, "Failed to unload model");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -186,13 +201,17 @@ pub async fn delete_model(
     State(state): State<AppState>,
     Json(form): Json<DownloadRequest>,
 ) -> Json<CommandResult> {
+    tracing::warn!(model = %form.model_name, "Delete model request");
     let mut s = state.stats.write().await;
     s.record_api_call(&format!("delete:{}", form.model_name));
     drop(s);
 
     match state.lms.delete_model(&form.model_name).await {
         Ok(msg) => Json(CommandResult { success: true, message: msg }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(model = %form.model_name, error = %e, "Failed to delete model");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -202,12 +221,22 @@ pub async fn runtime_status(State(state): State<AppState>) -> impl IntoResponse 
     s.record_api_call("runtime_status");
     drop(s);
 
-    let rt = state.lms.runtime_status().await;
+    let (rt, host_raw) = tokio::join!(
+        state.lms.runtime_status(),
+        state.lms.host_info(),
+    );
     let (runtimes, update_status) = match rt {
         Ok(r) => (parse_runtimes(&r.runtimes), r.update_status),
         Err(e) => (vec![], e),
     };
-    let tmpl = RuntimeTemplate { runtimes, update_status };
+    let host = parse_host_info(&host_raw.unwrap_or_default());
+    let tmpl = RuntimeTemplate {
+        runtimes,
+        update_status,
+        cuda_version: host.cuda_version,
+        nvidia_driver: host.nvidia_driver,
+        gpu: host.gpu,
+    };
     Html(tmpl.render().unwrap_or_else(|e| format!("Template error: {}", e)))
 }
 
@@ -217,7 +246,10 @@ pub async fn traffic_stats(State(state): State<AppState>) -> impl IntoResponse {
     s.record_request();
     drop(s);
     let stats = state.stats.read().await.clone();
-    let tmpl = StatsTemplate { stats };
+    let secs = stats.uptime_secs();
+    let uptime = format!("{}h {}m", secs / 3600, (secs % 3600) / 60);
+    let rate_per_min = if secs > 0 { stats.total_requests * 60 / secs as u64 } else { 0 };
+    let tmpl = StatsTemplate { stats, uptime, rate_per_min };
     Html(tmpl.render().unwrap_or_else(|e| format!("Template error: {}", e)))
 }
 
@@ -269,11 +301,10 @@ pub async fn server_logs(
     s.record_api_call("server_logs");
     drop(s);
 
-    let log_type = params.q.as_deref().unwrap_or("lms");
+    let log_type = params.q.as_deref().unwrap_or("app");
     let selected_dl = params.dl.unwrap_or_default();
 
     let (output, download_logs) = match log_type {
-        "app" => (state.lms.app_log().await.unwrap_or_else(|e| e), vec![]),
         "downloads" => {
             let logs_raw = state.lms.download_logs().await.unwrap_or_default();
             let logs: Vec<String> = logs_raw.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
@@ -286,7 +317,7 @@ pub async fn server_logs(
             };
             (content, logs)
         }
-        _ => (state.lms.recent_logs().await.unwrap_or_else(|e| e), vec![]),
+        _ => (state.lms.app_log().await.unwrap_or_else(|e| e), vec![]),
     };
 
     let selected_dl_idx = download_logs.iter().position(|l| l == &selected_dl).unwrap_or(0);
@@ -305,13 +336,17 @@ pub async fn select_runtime(
     State(state): State<AppState>,
     Json(form): Json<DownloadRequest>,
 ) -> Json<CommandResult> {
+    tracing::info!(runtime = %form.model_name, "Select runtime request");
     let mut s = state.stats.write().await;
     s.record_api_call(&format!("select_runtime:{}", form.model_name));
     drop(s);
 
     match state.lms.select_runtime(&form.model_name).await {
         Ok(msg) => Json(CommandResult { success: true, message: msg }),
-        Err(e) => Json(CommandResult { success: false, message: e }),
+        Err(e) => {
+            tracing::error!(runtime = %form.model_name, error = %e, "Failed to select runtime");
+            Json(CommandResult { success: false, message: e })
+        }
     }
 }
 
@@ -369,3 +404,15 @@ pub async fn chat_page(State(state): State<AppState>) -> impl IntoResponse {
     let tmpl = ChatTemplate { all_models };
     Html(tmpl.render().unwrap_or_else(|e| format!("Template error: {}", e)))
 }
+
+/// Apply runtime updates.
+pub async fn update_runtime(
+    State(state): State<AppState>,
+) -> Json<CommandResult> {
+    tracing::info!("Apply runtime update request");
+    match state.lms.update_runtime().await {
+        Ok(msg) => Json(CommandResult { success: true, message: msg }),
+        Err(e) => Json(CommandResult { success: false, message: e }),
+    }
+}
+

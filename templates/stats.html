@@ -3,7 +3,18 @@
 {% block content %}
 <div hx-get="/stats" hx-trigger="every 10s" hx-target="#stats-content" hx-select="#stats-content" hx-swap="outerHTML">
 <div id="stats-content">
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <!-- Uptime bar -->
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-4">
+            <span class="text-xs text-gray-400">Started: <span class="text-gray-200 font-mono">{{ stats.started_at.format("%Y-%m-%d %H:%M:%S UTC") }}</span></span>
+            <span class="text-xs text-gray-400">Uptime: <span class="text-green-400 font-mono" id="uptime">{{ uptime }}</span></span>
+            <span class="text-xs text-gray-400">Rate: <span class="text-blue-400 font-mono">{{ rate_per_min }} req/min</span></span>
+        </div>
+        <button onclick="resetStats(this)" class="text-xs bg-red-900/50 hover:bg-red-800 text-red-300 border border-red-700 px-3 py-1 rounded transition" data-tip="Reset all counters to zero">↺ Reset</button>
+    </div>
+
+    <!-- Counter cards -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="Total HTTP requests handled by this dashboard">
             <p class="text-3xl font-bold text-blue-400">{{ stats.total_requests }}</p>
             <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">Requests</p>
@@ -11,6 +22,10 @@
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="API and SSH calls made to LM Studio">
             <p class="text-3xl font-bold text-green-400">{{ stats.api_calls }}</p>
             <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">API Calls</p>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="Chat completion requests served">
+            <p class="text-3xl font-bold text-purple-400">{{ stats.chat_completions }}</p>
+            <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">Chat</p>
         </div>
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="Model download requests triggered">
             <p class="text-3xl font-bold text-yellow-400">{{ stats.model_downloads }}</p>
@@ -22,14 +37,43 @@
         </div>
     </div>
 
+    <!-- Activity breakdown bar -->
+    {% if stats.total_requests > 0 %}
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-6">
+        <h3 class="text-xs text-gray-400 uppercase tracking-wide mb-2">Activity Breakdown</h3>
+        <div class="flex h-4 rounded overflow-hidden bg-gray-900">
+            {% if stats.api_calls > 0 %}<div class="bg-green-600" style="width: {{ stats.api_calls * 100 / stats.total_requests }}%" data-tip="API: {{ stats.api_calls }}"></div>{% endif %}
+            {% if stats.chat_completions > 0 %}<div class="bg-purple-600" style="width: {{ stats.chat_completions * 100 / stats.total_requests }}%" data-tip="Chat: {{ stats.chat_completions }}"></div>{% endif %}
+            {% if stats.model_downloads > 0 %}<div class="bg-yellow-600" style="width: {{ stats.model_downloads * 100 / stats.total_requests }}%" data-tip="Downloads: {{ stats.model_downloads }}"></div>{% endif %}
+            {% if stats.errors > 0 %}<div class="bg-red-600" style="width: {{ stats.errors * 100 / stats.total_requests }}%" data-tip="Errors: {{ stats.errors }}"></div>{% endif %}
+        </div>
+        <div class="flex gap-4 mt-2 text-[10px] text-gray-400">
+            <span><span class="inline-block w-2 h-2 rounded bg-green-600"></span> API</span>
+            <span><span class="inline-block w-2 h-2 rounded bg-purple-600"></span> Chat</span>
+            <span><span class="inline-block w-2 h-2 rounded bg-yellow-600"></span> Downloads</span>
+            <span><span class="inline-block w-2 h-2 rounded bg-red-600"></span> Errors</span>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Event Log -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
-        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3">Event Log</h2>
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide">Event Log</h2>
+            <div class="flex items-center gap-1">
+                <button onclick="filterEvents('all')" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600 evt-filter evt-active" data-type="all">All</button>
+                <button onclick="filterEvents('api_call')" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-green-400 hover:bg-gray-600 evt-filter" data-type="api_call">API</button>
+                <button onclick="filterEvents('chat')" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-purple-400 hover:bg-gray-600 evt-filter" data-type="chat">Chat</button>
+                <button onclick="filterEvents('download')" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-yellow-400 hover:bg-gray-600 evt-filter" data-type="download">Downloads</button>
+                <button onclick="filterEvents('error')" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-red-400 hover:bg-gray-600 evt-filter" data-type="error">Errors</button>
+            </div>
+        </div>
         {% if stats.recent_events.is_empty() %}
         <p class="text-gray-500 text-sm italic">No events yet</p>
         {% else %}
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
+        <div class="overflow-x-auto max-h-[50vh] overflow-y-auto">
+            <table class="w-full text-sm" id="event-table">
+                <thead class="sticky top-0 bg-gray-800">
                     <tr class="text-gray-400 border-b border-gray-700 text-xs uppercase">
                         <th class="text-left py-2 px-3">Time</th>
                         <th class="text-left py-2 px-3">Type</th>
@@ -38,18 +82,20 @@
                 </thead>
                 <tbody>
                     {% for event in stats.recent_events.iter().rev() %}
-                    <tr class="border-b border-gray-700/30 hover:bg-gray-700/20">
-                        <td class="py-1.5 px-3 text-gray-400 text-xs font-mono">{{ event.timestamp.format("%H:%M:%S") }}</td>
+                    <tr class="border-b border-gray-700/30 hover:bg-gray-700/20 evt-row" data-kind="{{ event.kind }}">
+                        <td class="py-1.5 px-3 text-gray-400 text-xs font-mono whitespace-nowrap">{{ event.timestamp.format("%H:%M:%S") }}</td>
                         <td class="py-1.5 px-3">
                             {% if event.kind == "error" %}
                             <span class="text-red-400 text-xs">● error</span>
                             {% else if event.kind == "download" %}
                             <span class="text-yellow-400 text-xs">● download</span>
+                            {% else if event.kind == "chat" %}
+                            <span class="text-purple-400 text-xs">● chat</span>
                             {% else %}
                             <span class="text-green-400 text-xs">● {{ event.kind }}</span>
                             {% endif %}
                         </td>
-                        <td class="py-1.5 px-3 font-mono text-xs text-gray-300">{{ event.detail }}</td>
+                        <td class="py-1.5 px-3 font-mono text-xs text-gray-300 truncate max-w-md">{{ event.detail }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -59,4 +105,20 @@
     </div>
 </div>
 </div>
+
+<script>
+async function resetStats(btn) {
+    if (!confirm('Reset all traffic statistics?')) return;
+    await apiPost('/api/stats/reset', {}, btn);
+    setTimeout(() => location.reload(), 500);
+}
+
+function filterEvents(type) {
+    document.querySelectorAll('.evt-filter').forEach(b => b.classList.remove('evt-active', 'ring-1', 'ring-gray-400'));
+    document.querySelector(`.evt-filter[data-type="${type}"]`).classList.add('evt-active', 'ring-1', 'ring-gray-400');
+    document.querySelectorAll('.evt-row').forEach(row => {
+        row.style.display = (type === 'all' || row.dataset.kind === type) ? '' : 'none';
+    });
+}
+</script>
 {% endblock %}

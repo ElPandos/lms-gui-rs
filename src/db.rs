@@ -11,9 +11,14 @@ pub struct Database {
 impl Database {
     /// Open (or create) the database at `path` and initialize tables.
     pub fn new(path: &str) -> Result<Self, String> {
-        let conn = Connection::open(path).map_err(|e| format!("DB open error: {}", e))?;
+        tracing::info!(path = %path, "Opening database");
+        let conn = Connection::open(path).map_err(|e| {
+            tracing::error!(path = %path, error = %e, "Failed to open database");
+            format!("DB open error: {}", e)
+        })?;
         let db = Self { conn: Mutex::new(conn) };
         db.init_tables()?;
+        tracing::debug!("Database tables initialized");
         Ok(db)
     }
 
@@ -62,6 +67,7 @@ impl Database {
 
     /// Insert or update a setting by key.
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        tracing::debug!(key = %key, "Saving setting");
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
@@ -94,6 +100,7 @@ impl Database {
 
     /// Persist a chat message with optional metadata.
     pub fn save_chat_message(&self, role: &str, model: &str, content: &str, settings_json: Option<&str>, response_json: Option<&str>, duration_ms: Option<u64>, tokens: Option<u32>) -> Result<i64, String> {
+        tracing::debug!(role = %role, model = %model, "Saving chat message");
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO chat_messages (role, model, content, settings_json, response_json, duration_ms, tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -126,6 +133,7 @@ impl Database {
 
     /// Delete all chat messages.
     pub fn clear_chat_history(&self) -> Result<(), String> {
+        tracing::info!("Clearing all chat history");
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM chat_messages", []).map_err(|e| format!("DB clear error: {}", e))?;
         Ok(())
@@ -135,6 +143,7 @@ impl Database {
 
     /// Persist a speed test result with stats JSON.
     pub fn save_test_result(&self, test_type: &str, model: &str, num_calls: u32, max_tokens: u32, sigma: u32, results_json: &str, stats_json: &str) -> Result<i64, String> {
+        tracing::info!(test_type = %test_type, model = %model, num_calls, "Saving test result");
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO test_results (test_type, model, num_calls, max_tokens, sigma, results_json, stats_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -177,6 +186,7 @@ impl Database {
 
     /// Import settings and chat history from a JSON export.
     pub fn import_all(&self, data: &serde_json::Value) -> Result<(), String> {
+        tracing::info!("Importing data from JSON export");
         // Import settings
         if let Some(settings) = data["settings"].as_array() {
             for s in settings {

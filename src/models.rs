@@ -97,6 +97,7 @@ pub struct RuntimeEntry {
     pub engine: String,
     pub selected: bool,
     pub format: String,
+    pub version: String,
 }
 
 /// Parsed host hardware and system information.
@@ -363,10 +364,18 @@ pub fn parse_runtimes(output: &str) -> Vec<RuntimeEntry> {
         if let Some(engine) = parts.first() {
             if engine.starts_with("llama") || engine.starts_with("mlx") || engine.contains("cpp") {
                 let format = parts.last().unwrap_or(&"").to_string();
+                // Look for a version-like token (contains a digit, isn't engine or format)
+                let version = parts.iter()
+                    .skip(1)
+                    .filter(|p| **p != "✓" && **p != format.as_str())
+                    .find(|p| p.chars().any(|c| c.is_ascii_digit()))
+                    .unwrap_or(&"")
+                    .to_string();
                 entries.push(RuntimeEntry {
                     engine: engine.to_string(),
                     selected,
                     format,
+                    version,
                 });
             }
         }

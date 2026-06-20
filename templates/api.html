@@ -2,8 +2,15 @@
 {% block title %}API — LMS{% endblock %}
 {% block content %}
 <div class="space-y-6">
+    <!-- LMS API Status -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
-        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-4">LM Studio API (port 8010)</h2>
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide">LM Studio API (port 8010)</h2>
+            <div class="flex items-center gap-2">
+                <span id="lms-status" class="text-xs text-gray-400">Checking...</span>
+                <span id="lms-dot" class="w-2 h-2 rounded-full bg-gray-600"></span>
+            </div>
+        </div>
         <div class="overflow-x-auto">
             <table class="w-full text-sm">
                 <thead>
@@ -11,18 +18,20 @@
                         <th class="text-left py-2 px-3">Method</th>
                         <th class="text-left py-2 px-3">Endpoint</th>
                         <th class="text-left py-2 px-3">Description</th>
+                        <th class="text-right py-2 px-3"></th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/v1/models</td><td class="py-2 px-3 text-gray-400">List available models</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/chat/completions</td><td class="py-2 px-3 text-gray-400">Chat with a model (OpenAI compatible)</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/completions</td><td class="py-2 px-3 text-gray-400">Text completion</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/embeddings</td><td class="py-2 px-3 text-gray-400">Generate embeddings</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/v1/models</td><td class="py-2 px-3 text-gray-400">List available models</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/chat/completions</td><td class="py-2 px-3 text-gray-400">Chat with a model (OpenAI compatible)</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/completions</td><td class="py-2 px-3 text-gray-400">Text completion</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/embeddings</td><td class="py-2 px-3 text-gray-400">Generate embeddings</td><td class="py-2 px-3"></td></tr>
                 </tbody>
             </table>
         </div>
     </div>
 
+    <!-- Dashboard API -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
         <h2 class="text-sm font-semibold text-green-400 uppercase tracking-wide mb-4">Dashboard API (port 3000)</h2>
         <div class="overflow-x-auto">
@@ -32,23 +41,114 @@
                         <th class="text-left py-2 px-3">Method</th>
                         <th class="text-left py-2 px-3">Endpoint</th>
                         <th class="text-left py-2 px-3">Description</th>
+                        <th class="text-left py-2 px-3">Body</th>
+                        <th class="text-right py-2 px-3"></th>
                     </tr>
                 </thead>
-                <tbody>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models</td><td class="py-2 px-3 text-gray-400">Model list as JSON</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models/loaded</td><td class="py-2 px-3 text-gray-400">Loaded models output</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/stats</td><td class="py-2 px-3 text-gray-400">Traffic stats as JSON</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/download/status?q=name</td><td class="py-2 px-3 text-gray-400">Download progress for a model</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/load/status</td><td class="py-2 px-3 text-gray-400">Model load status</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/download</td><td class="py-2 px-3 text-gray-400">Start model download</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/load</td><td class="py-2 px-3 text-gray-400">Load model into memory</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/unload</td><td class="py-2 px-3 text-gray-400">Unload model from memory</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-red-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/delete</td><td class="py-2 px-3 text-gray-400">Delete model from disk</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/runtime/select</td><td class="py-2 px-3 text-gray-400">Switch active runtime</td></tr>
+                <tbody class="text-xs">
+                    <tr class="border-b border-gray-700/30 bg-gray-900/30"><td colspan="5" class="py-2 px-3 text-gray-500 uppercase font-semibold">Models</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models</td><td class="py-2 px-3 text-gray-400">Model list as JSON</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models/loaded</td><td class="py-2 px-3 text-gray-400">Currently loaded models</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models/loaded', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/download/status?q=name</td><td class="py-2 px-3 text-gray-400">Download progress</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/load/status</td><td class="py-2 px-3 text-gray-400">Model load status</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/models/load/status', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/download</td><td class="py-2 px-3 text-gray-400">Start model download</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/load</td><td class="py-2 px-3 text-gray-400">Load model into GPU</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/unload</td><td class="py-2 px-3 text-gray-400">Unload model</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-red-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/delete</td><td class="py-2 px-3 text-gray-400">Delete model from disk</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
+
+                    <tr class="border-b border-gray-700/30 bg-gray-900/30"><td colspan="5" class="py-2 px-3 text-gray-500 uppercase font-semibold">Runtime</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/runtime/select</td><td class="py-2 px-3 text-gray-400">Switch active runtime</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/runtime/update</td><td class="py-2 px-3 text-gray-400">Apply runtime updates</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3"></td></tr>
+
+                    <tr class="border-b border-gray-700/30 bg-gray-900/30"><td colspan="5" class="py-2 px-3 text-gray-500 uppercase font-semibold">Chat</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/chat/send</td><td class="py-2 px-3 text-gray-400">Send chat completion</td><td class="py-2 px-3 font-mono text-gray-500">{"model":"...","message":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/chat/speedtest</td><td class="py-2 px-3 text-gray-400">Run speed test</td><td class="py-2 px-3 font-mono text-gray-500">{"model":"...","num_calls":10,"sigma":2,"max_tokens":64}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/chat/history</td><td class="py-2 px-3 text-gray-400">Chat message history</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/chat/history', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/api/chat/save</td><td class="py-2 px-3 text-gray-400">Save chat message</td><td class="py-2 px-3 font-mono text-gray-500">{"role":"...","model":"...","content":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-red-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/api/chat/clear</td><td class="py-2 px-3 text-gray-400">Clear all chat history</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3"></td></tr>
+
+                    <tr class="border-b border-gray-700/30 bg-gray-900/30"><td colspan="5" class="py-2 px-3 text-gray-500 uppercase font-semibold">Tests</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/tests/history</td><td class="py-2 px-3 text-gray-400">Saved test results</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/tests/history', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/api/tests/save</td><td class="py-2 px-3 text-gray-400">Save test result</td><td class="py-2 px-3 font-mono text-gray-500">{"test_type":"...","model":"...",...}</td><td class="py-2 px-3"></td></tr>
+
+                    <tr class="border-b border-gray-700/30 bg-gray-900/30"><td colspan="5" class="py-2 px-3 text-gray-500 uppercase font-semibold">Settings & Data</td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/settings</td><td class="py-2 px-3 text-gray-400">All saved settings</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/settings', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/api/settings</td><td class="py-2 px-3 text-gray-400">Save a setting</td><td class="py-2 px-3 font-mono text-gray-500">{"key":"...","value":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/stats</td><td class="py-2 px-3 text-gray-400">Traffic statistics</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/stats', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-red-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/api/stats/reset</td><td class="py-2 px-3 text-gray-400">Reset traffic counters</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/export</td><td class="py-2 px-3 text-gray-400">Export all data</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/export', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/api/import</td><td class="py-2 px-3 text-gray-400">Import data from export</td><td class="py-2 px-3 font-mono text-gray-500">{...export JSON...}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/mode</td><td class="py-2 px-3 text-gray-400">Local/remote mode</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/mode', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
                 </tbody>
             </table>
         </div>
-        <p class="text-xs text-gray-500 mt-3">POST endpoints accept JSON body: <code class="text-gray-300">{"model_name": "..."}</code></p>
+    </div>
+
+    <!-- Response viewer -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700" id="response-section" style="display:none">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-orange-400 uppercase tracking-wide">Response</h2>
+            <div class="flex items-center gap-2">
+                <span id="resp-status" class="text-xs font-mono text-gray-400"></span>
+                <button onclick="copyResponse()" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded transition">Copy</button>
+                <button onclick="document.getElementById('response-section').style.display='none'" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded transition">✕</button>
+            </div>
+        </div>
+        <pre id="resp-body" class="bg-gray-900 rounded p-4 border border-gray-700 text-xs text-gray-300 max-h-[40vh] overflow-auto whitespace-pre-wrap"></pre>
     </div>
 </div>
+
+<script>
+// Check LMS API status
+(async function() {
+    try {
+        const resp = await fetch('/api/models');
+        const dot = document.getElementById('lms-dot');
+        const status = document.getElementById('lms-status');
+        if (resp.ok) {
+            const data = await resp.json();
+            dot.className = 'w-2 h-2 rounded-full bg-green-500';
+            status.textContent = `Online (${data.length} models)`;
+            status.className = 'text-xs text-green-400';
+        } else {
+            dot.className = 'w-2 h-2 rounded-full bg-red-500';
+            status.textContent = 'Error';
+            status.className = 'text-xs text-red-400';
+        }
+    } catch(e) {
+        document.getElementById('lms-dot').className = 'w-2 h-2 rounded-full bg-red-500';
+        document.getElementById('lms-status').textContent = 'Unreachable';
+        document.getElementById('lms-status').className = 'text-xs text-red-400';
+    }
+})();
+
+async function tryEndpoint(url, btn) {
+    if (btn) { btn.classList.add('btn-loading'); btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; }
+    const section = document.getElementById('response-section');
+    const body = document.getElementById('resp-body');
+    const status = document.getElementById('resp-status');
+    section.style.display = '';
+    body.textContent = 'Loading...';
+    try {
+        const start = performance.now();
+        const resp = await fetch(url);
+        const ms = Math.round(performance.now() - start);
+        const data = await resp.json();
+        status.textContent = `${resp.status} ${resp.statusText} · ${ms}ms`;
+        status.className = resp.ok ? 'text-xs font-mono text-green-400' : 'text-xs font-mono text-red-400';
+        body.textContent = JSON.stringify(data, null, 2);
+    } catch(e) {
+        status.textContent = 'Error';
+        status.className = 'text-xs font-mono text-red-400';
+        body.textContent = e.message;
+    }
+    if (btn) { btn.classList.remove('btn-loading'); btn.innerHTML = btn.dataset.orig || 'Try'; }
+    section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function copyResponse() {
+    const text = document.getElementById('resp-body').textContent;
+    navigator.clipboard.writeText(text).then(() => showToast('Copied', false));
+}
+</script>
 {% endblock %}

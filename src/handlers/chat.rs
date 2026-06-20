@@ -82,20 +82,31 @@ pub async fn chat_send(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
 ) -> Json<ChatResponse> {
+    tracing::info!(model = %req.model, max_tokens = req.max_tokens, "Chat request received");
     let start = std::time::Instant::now();
+    let mut s = state.stats.write().await;
+    s.record_chat(&req.model);
+    drop(s);
     match state.lms.chat_completion(&req).await {
-        Ok((content, tokens)) => Json(ChatResponse {
-            success: true,
-            content,
-            duration_ms: start.elapsed().as_millis() as u64,
-            tokens_used: tokens,
-        }),
-        Err(e) => Json(ChatResponse {
-            success: false,
-            content: e,
-            duration_ms: start.elapsed().as_millis() as u64,
-            tokens_used: 0,
-        }),
+        Ok((content, tokens)) => {
+            let ms = start.elapsed().as_millis() as u64;
+            tracing::info!(model = %req.model, duration_ms = ms, tokens, "Chat response sent");
+            Json(ChatResponse {
+                success: true,
+                content,
+                duration_ms: ms,
+                tokens_used: tokens,
+            })
+        }
+        Err(e) => {
+            tracing::error!(model = %req.model, error = %e, "Chat completion failed");
+            Json(ChatResponse {
+                success: false,
+                content: e,
+                duration_ms: start.elapsed().as_millis() as u64,
+                tokens_used: 0,
+            })
+        }
     }
 }
 
@@ -127,7 +138,14 @@ pub async fn chat_speedtest(
     State(state): State<AppState>,
     Json(req): Json<SpeedTestRequest>,
 ) -> Json<SpeedTestResult> {
+    tracing::info!(model = %req.model, num_calls = req.num_calls, max_tokens = req.max_tokens, sigma = req.sigma, "Speed test started");
     let mut results: Vec<SpeedTestCall> = Vec::new();
+
+    // Record speed test as a chat event
+    {
+        let mut s = state.stats.write().await;
+        s.record_chat(&format!("speedtest:{} ({}x)", req.model, req.num_calls));
+    }
 
     // Warmup call (not counted)
     let warmup_req = ChatRequest {
@@ -194,7 +212,7 @@ pub async fn chat_speedtest(
     let filtered_mean = if filtered.is_empty() { mean } else { filtered.iter().sum::<f64>() / filtered.len() as f64 };
 
     let mut sorted = durations.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = if sorted.len() % 2 == 0 {
         (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
     } else {
@@ -213,5 +231,6 @@ pub async fn chat_speedtest(
         sigma: req.sigma,
     };
 
+    tracing::info!(model = %req.model, mean_ms = %mean, min_ms = stats.min_ms, max_ms = stats.max_ms, "Speed test completed");
     Json(SpeedTestResult { success: true, results, stats })
 }

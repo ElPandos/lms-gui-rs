@@ -173,3 +173,14 @@
 - **Root cause**: `classList.toggle('hidden', condition)` didn't work reliably — possibly due to settings restore overwriting DOM before toggle runs
 - **Fix**: Use inline `style.display = 'block'/'none'` which has higher specificity and can't be overridden by class conflicts
 - **Prevention**: For JS-toggled visibility, prefer inline style over class manipulation when persistence/restore is involved
+
+---
+
+## [logging] Rolling log file triggers cargo-watch restart loop
+
+- **Last seen**: 2026-06-20
+- **Times seen**: 1
+- **Symptom**: App restarts repeatedly every 2 seconds when using cargo-watch or file watcher
+- **Root cause**: tracing-appender writes rolling log files (lms-gui-rs.log.*) to the project directory; file watcher detects new/modified file → recompiles → restarts → writes log → loop
+- **Fix**: Add `lms-gui-rs.log*` to .gitignore and watcher ignore (cargo-watch: `-i "lms-gui-rs.log*"`)
+- **Prevention**: When adding file-based logging, always add log patterns to .gitignore and watcher exclusions in the same commit
