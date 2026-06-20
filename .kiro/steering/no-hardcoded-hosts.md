@@ -16,16 +16,16 @@ Never hardcode IP addresses, hostnames, usernames, or passwords in source code. 
 
 | Variable | Purpose |
 |----------|---------|
-| `ENV_IP_JUMP_231_HOST` | Remote host IP address |
-| `ENV_USER_JUMP_231_HOST` | Remote host SSH username |
-| `ENV_PASS_JUMP_231_HOST` | Remote host SSH password |
+| `ENV_IP_JUMP_155_HOST` | Remote host IP address |
+| `ENV_USER_JUMP_155_HOST` | Remote host SSH username |
+| `ENV_PASS_JUMP_155_HOST` | Remote host SSH password |
 
 ## Usage Pattern
 
 ```python
 import os
-host = os.environ["ENV_IP_JUMP_231_HOST"]
-user = os.environ["ENV_USER_JUMP_231_HOST"]
+host = os.environ["ENV_IP_JUMP_155_HOST"]
+user = os.environ["ENV_USER_JUMP_155_HOST"]
 ```
 
 ## Violations
@@ -33,5 +33,5 @@ user = os.environ["ENV_USER_JUMP_231_HOST"]
 - ❌ `REMOTE_HOST = "hts@137.58.231.231"`
 - ❌ `ssh hts@137.58.231.231`
 - ❌ Any literal IP or username in committed code
-- ✅ `os.environ["ENV_IP_JUMP_231_HOST"]`
+- ✅ `os.environ["ENV_IP_JUMP_155_HOST"]`
 - ✅ References to env var names in comments/docs are fine

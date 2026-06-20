@@ -4,26 +4,26 @@
 <div hx-get="/stats" hx-trigger="every 10s" hx-target="#stats-content" hx-select="#stats-content" hx-swap="outerHTML">
 <div id="stats-content">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" title="Total HTTP requests handled by this dashboard">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="Total HTTP requests handled by this dashboard">
             <p class="text-3xl font-bold text-blue-400">{{ stats.total_requests }}</p>
             <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">Requests</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" title="API and SSH calls made to LM Studio">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="API and SSH calls made to LM Studio">
             <p class="text-3xl font-bold text-green-400">{{ stats.api_calls }}</p>
             <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">API Calls</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" title="Model download requests triggered">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="Model download requests triggered">
             <p class="text-3xl font-bold text-yellow-400">{{ stats.model_downloads }}</p>
             <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">Downloads</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" title="Failed operations">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center" data-tip="Failed operations">
             <p class="text-3xl font-bold text-red-400">{{ stats.errors }}</p>
             <p class="text-xs text-gray-400 uppercase tracking-wide mt-1">Errors</p>
         </div>
     </div>
 
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
-        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3" title="Recent operations performed through this dashboard">Event Log</h2>
+        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3">Event Log</h2>
         {% if stats.recent_events.is_empty() %}
         <p class="text-gray-500 text-sm italic">No events yet</p>
         {% else %}

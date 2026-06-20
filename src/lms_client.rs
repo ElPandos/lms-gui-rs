@@ -8,8 +8,8 @@ use crate::models::{Model, ModelsResponse, RuntimeInfo};
 use std::process::Command;
 
 fn ssh_host() -> String {
-    let user = std::env::var("ENV_USER_JUMP_231_HOST").expect("ENV_USER_JUMP_231_HOST must be set");
-    let ip = std::env::var("ENV_IP_JUMP_231_HOST").expect("ENV_IP_JUMP_231_HOST must be set");
+    let user = std::env::var("ENV_USER_JUMP_155_HOST").expect("ENV_USER_JUMP_155_HOST must be set");
+    let ip = std::env::var("ENV_IP_JUMP_155_HOST").expect("ENV_IP_JUMP_155_HOST must be set");
     format!("{}@{}", user, ip)
 }
 const SSH_MUX_PATH: &str = "/tmp/lms-gui-ssh-mux";
@@ -23,7 +23,7 @@ const SSH_MUX_PATH: &str = "/tmp/lms-gui-ssh-mux";
 pub struct LmsClient {
     pub base_url: String,
     client: Client,
-    local_mode: bool,
+    pub local_mode: bool,
 }
 
 /// Strip ANSI escape sequences and carriage returns from terminal output.
@@ -37,6 +37,7 @@ fn strip_ansi(input: &str) -> String {
 }
 
 impl LmsClient {
+    /// Create a new client, establishing an SSH ControlMaster if in remote mode.
     pub fn new(base_url: String) -> Self {
         let local_mode = std::env::var("LMS_LOCAL").unwrap_or_default() == "1";
 
@@ -65,6 +66,7 @@ impl LmsClient {
         }
     }
 
+    /// Fetch the model list from the LMS REST API.
     pub async fn list_models(&self) -> Result<Vec<Model>, String> {
         let resp = self.client
             .get(format!("{}/v1/models", self.base_url))
@@ -80,14 +82,17 @@ impl LmsClient {
         Ok(body.data)
     }
 
+    /// List locally-downloaded models via `lms ls`.
     pub async fn list_local_models(&self) -> Result<String, String> {
         self.run_cmd("lms ls").await
     }
 
+    /// List currently loaded models via `lms ps`.
     pub async fn list_loaded_models(&self) -> Result<String, String> {
         self.run_cmd("lms ps").await
     }
 
+    /// Start a background model download via `lms get`.
     pub async fn download_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
@@ -99,6 +104,7 @@ impl LmsClient {
         )).await
     }
 
+    /// Unload and delete a model from disk.
     pub async fn delete_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         // Model name like "google/gemma-4-e2b" → search for directory containing "gemma-4-e2b"
@@ -109,17 +115,20 @@ impl LmsClient {
         )).await
     }
 
+    /// Get the tail of a model's download log file.
     pub async fn download_status(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
-        self.run_cmd(&format!("tail -c 300 {} 2>/dev/null || echo 'no log'", log_file)).await
+        self.run_cmd(&format!("tail -c 500 {} 2>/dev/null || echo 'no log'", log_file)).await
     }
 
+    /// Switch the active inference runtime via `lms runtime select`.
     pub async fn select_runtime(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         self.run_cmd(&format!("lms runtime select {}", safe_name)).await
     }
 
+    /// Load a model into GPU memory in the background.
     pub async fn load_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         self.run_cmd(&format!(
@@ -128,10 +137,12 @@ impl LmsClient {
         )).await
     }
 
+    /// Check the current model load status from the log file.
     pub async fn load_status(&self) -> Result<String, String> {
         self.run_cmd("tail -3 /tmp/lms-load.log 2>/dev/null || echo 'idle'").await
     }
 
+    /// Unload a model (or all models with `--all`) from memory.
     pub async fn unload_model(&self, name: &str) -> Result<String, String> {
         if name == "--all" {
             self.run_cmd("lms unload --all").await
@@ -141,6 +152,7 @@ impl LmsClient {
         }
     }
 
+    /// Fetch runtime list and update status concurrently.
     pub async fn runtime_status(&self) -> Result<RuntimeInfo, String> {
         let (ls, update) = tokio::join!(
             self.run_cmd("lms runtime ls"),
@@ -152,12 +164,14 @@ impl LmsClient {
         })
     }
 
+    /// Gather host hardware info (CPU, RAM, GPU, disk, uptime).
     pub async fn host_info(&self) -> Result<String, String> {
         self.run_cmd(
             "echo \"$(hostname)|$(lscpu | grep 'Model name' | sed 's/.*: *//')|$(lscpu | grep 'Socket' | awk '{print $NF}')x$(lscpu | grep 'Core(s) per socket' | awk '{print $NF}')c|$(free -h | awk '/Mem/{print $2}' | sed 's/i$//')|$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1 || echo 'N/A')|$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)|$(uptime -p)|$(df -h $HOME/.lmstudio/models 2>/dev/null | awk 'NR==2{print $2\"/\"$4}' || df -h $HOME | awk 'NR==2{print $2\"/\"$4}')|$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo 'N/A')|$(nvidia-smi | grep 'CUDA Version' | awk '{print $9}' 2>/dev/null || echo 'N/A')|$(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'\"' -f2 || echo 'Unknown')\""
         ).await
     }
 
+    /// Search for models on LM Studio Hub via `lms get`.
     pub async fn search_models(&self, query: &str) -> Result<String, String> {
         let mut cmd = String::from("timeout 15 lms get");
         if !query.is_empty() {
@@ -190,23 +204,28 @@ impl LmsClient {
         Ok(models)
     }
 
+    /// Stream recent LMS inference logs.
     pub async fn recent_logs(&self) -> Result<String, String> {
         self.run_cmd("timeout 3 lms log stream 2>&1; true").await
     }
 
+    /// Query current GPU memory usage via `nvidia-smi`.
     pub async fn gpu_memory(&self) -> Result<String, String> {
         self.run_cmd("nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | awk -F', ' '{u+=$1;t+=$2} END{printf \"%dG / %dG\", u/1024, t/1024}'").await
     }
 
+    /// Read the last 100 lines of the application log.
     pub async fn app_log(&self) -> Result<String, String> {
         self.run_cmd("tail -100 /home/hts/lms-gui-rs/lms-gui-rs.log 2>/dev/null || echo 'No app log'").await
     }
 
+    /// List available download log file names.
     pub async fn download_logs(&self) -> Result<String, String> {
         // List available download log files
         self.run_cmd("for f in /tmp/lms-dl-*.log; do [ -f \"$f\" ] && basename \"$f\" .log | sed 's/lms-dl-//'; done 2>/dev/null").await
     }
 
+    /// Read the tail of a specific download log.
     pub async fn download_log_content(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
@@ -215,6 +234,61 @@ impl LmsClient {
 
     fn sanitize(input: &str) -> String {
         input.replace(|c: char| !c.is_alphanumeric() && c != '/' && c != '-' && c != '_' && c != '.' && c != ':' && c != '@', "")
+    }
+
+    /// Send a chat completion request to the LMS API.
+    pub async fn chat_completion(&self, req: &crate::handlers::ChatRequest) -> Result<(String, u32), String> {
+        let mut messages = Vec::new();
+        if let Some(ref sys) = req.system_prompt {
+            if !sys.is_empty() {
+                messages.push(serde_json::json!({"role": "system", "content": sys}));
+            }
+        }
+        messages.push(serde_json::json!({"role": "user", "content": req.message}));
+
+        let mut body = serde_json::json!({
+            "model": req.model,
+            "messages": messages,
+            "temperature": req.temperature,
+            "max_tokens": req.max_tokens,
+            "stream": false,
+        });
+
+        if let Some(top_p) = req.top_p {
+            body["top_p"] = serde_json::json!(top_p);
+        }
+        if let Some(fp) = req.frequency_penalty {
+            body["frequency_penalty"] = serde_json::json!(fp);
+        }
+        if let Some(pp) = req.presence_penalty {
+            body["presence_penalty"] = serde_json::json!(pp);
+        }
+
+        let resp = self.client
+            .post(format!("{}/v1/chat/completions", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))?;
+
+        let content = data["choices"][0]["message"]["content"]
+            .as_str()
+            .or_else(|| data["choices"][0]["delta"]["content"].as_str())
+            .or_else(|| data["choices"][0]["text"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let tokens = data["usage"]["total_tokens"]
+            .as_u64()
+            .or_else(|| data["usage"]["completion_tokens"].as_u64())
+            .unwrap_or(0) as u32;
+
+        Ok((content, tokens))
     }
 
     async fn run_cmd(&self, cmd: &str) -> Result<String, String> {

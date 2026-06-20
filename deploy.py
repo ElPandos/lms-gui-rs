@@ -10,8 +10,8 @@ from pathlib import Path
 
 # === Configuration ===
 BINARY_NAME = "lms-gui-rs"
-_remote_user = os.environ["ENV_USER_JUMP_231_HOST"]
-_remote_ip = os.environ["ENV_IP_JUMP_231_HOST"]
+_remote_user = os.environ["ENV_USER_JUMP_155_HOST"]
+_remote_ip = os.environ["ENV_IP_JUMP_155_HOST"]
 REMOTE_HOST = f"{_remote_user}@{_remote_ip}"
 REMOTE_DIR = f"/home/{_remote_user}/lms-gui-rs"
 REMOTE_PORT = 3000

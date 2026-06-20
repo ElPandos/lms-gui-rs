@@ -17,14 +17,26 @@
                 <option value="newest" {% if search_sort == "newest" %}selected{% endif %}>Newest</option>
             </select>
             {% endif %}
+            <select id="max-params-filter" onchange="filterByParams()"
+                class="ml-auto text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200"
+                data-tip="Filter by max parameter count (approximate VRAM usage)">
+                <option value="0">All sizes</option>
+                <option value="3">≤3B (~2-3 GB)</option>
+                <option value="7">≤7B (~4-7 GB)</option>
+                <option value="8">≤8B (~5-8 GB)</option>
+                <option value="13">≤13B (~8-13 GB)</option>
+                <option value="14">≤14B (~9-14 GB)</option>
+                <option value="27">≤27B (~15-22 GB)</option>
+                <option value="35">≤35B (~20-28 GB)</option>
+                <option value="70">≤70B (~35-55 GB)</option>
+            </select>
         </div>
         <form method="get" action="/models" class="flex gap-3" onsubmit="showSearchSpinner()">
             <input type="hidden" name="source" value="{{ search_source }}">
             <input type="text" name="q" value="{{ query }}" placeholder="e.g. llama, qwen, gemma, mistral"
-                title="Enter a model name or keyword to search"
+                data-tip="Enter a model name or keyword to search"
                 class="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
             <button type="submit" id="search-btn"
-                title="Search for models"
                 class="bg-yellow-600 hover:bg-yellow-700 px-5 py-2 rounded text-sm font-medium transition">Search</button>
         </form>
         <!-- LMS results -->
@@ -42,7 +54,7 @@
                         <span class="dl-info text-xs text-gray-400 hidden"></span>
                     </div>
                     <button onclick="startDownload('{{ result.name }}', this)"
-                        title="Download {{ result.name }}"
+                        data-tip="Download {{ result.name }}"
                         class="ml-3 shrink-0 text-xs bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded transition">⬇ Get</button>
                 </div>
                 <div class="dl-progress mt-2 hidden">
@@ -66,7 +78,7 @@
                         <p class="text-xs text-gray-500 mt-0.5">⬇ {{ model.downloads }} · ♥ {{ model.likes }}</p>
                     </div>
                     <button onclick="startDownload('https://huggingface.co/{{ model.model_id }}', this)"
-                        title="Download {{ model.model_id }}"
+                        data-tip="Download {{ model.model_id }}"
                         class="ml-3 shrink-0 text-xs bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded transition">⬇ Get</button>
                 </div>
             </div>
@@ -84,7 +96,7 @@
     <!-- Local disk table -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700" id="local-disk-section">
         <div class="flex items-center justify-between mb-2">
-            <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide" title="Models stored on the server's local disk">Local Disk (lms ls)</h2>
+            <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide" data-tip="Models stored on the server's local disk">Local Disk (lms ls)</h2>
             <span class="text-xs text-gray-500 font-mono">~/.lmstudio/models/</span>
         </div>
         {% if !disk_summary.is_empty() || !disk_total.is_empty() %}
@@ -117,7 +129,6 @@
                         <td class="py-2 px-3 text-xs {% if m.status.contains("LOADED") %}text-green-400{% else %}text-gray-400{% endif %}">{{ m.status }}</td>
                         <td class="py-2 px-3 text-right">
                             <button onclick="deleteModel('{{ m.name }}', this)"
-                                title="Delete {{ m.name }} from disk"
                                 class="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded transition">Delete</button>
                         </td>
                     </tr>
@@ -135,6 +146,52 @@ function showSearchSpinner() {
     btn.classList.add('btn-loading');
     btn.innerHTML = '<span class="spinner"></span> Searching...';
 }
+
+// Extract parameter count from model name (e.g. "7b", "13B", "70b")
+function extractParams(name) {
+    const match = name.match(/[\-_/](\d+\.?\d*)[bB]/);
+    if (match) return parseFloat(match[1]);
+    // Try "NxNB" patterns (MoE)
+    const moe = name.match(/(\d+)x(\d+\.?\d*)[bB]/i);
+    if (moe) return parseFloat(moe[1]) * parseFloat(moe[2]);
+    return 0;
+}
+
+// Estimate VRAM from param count (Q4 quantization typical)
+function estimateSize(params) {
+    if (params <= 0) return '';
+    const gb = params * 0.6; // rough Q4 estimate
+    return `~${gb.toFixed(0)}GB`;
+}
+
+function filterByParams() {
+    const max = parseInt(document.getElementById('max-params-filter').value);
+    // Filter LMS results
+    document.querySelectorAll('[id^=dl-card]').forEach(card => {
+        const name = card.querySelector('.font-mono')?.textContent?.trim() || '';
+        const params = extractParams(name);
+        card.style.display = (max === 0 || params === 0 || params <= max) ? '' : 'none';
+    });
+    // Filter HF results
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        const name = card.querySelector('.font-mono')?.textContent?.trim() || '';
+        const params = extractParams(name);
+        card.style.display = (max === 0 || params === 0 || params <= max) ? '' : 'none';
+    });
+}
+
+// On load: add size estimates to cards
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[id^=dl-card], [id^=hf-card]').forEach(card => {
+        const nameEl = card.querySelector('.font-mono');
+        if (!nameEl) return;
+        const params = extractParams(nameEl.textContent.trim());
+        if (params > 0) {
+            nameEl.insertAdjacentHTML('afterend',
+                ` <span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${params}B ${estimateSize(params)}</span>`);
+        }
+    });
+});
 
 async function deleteModel(name, btn) {
     if (!confirm(`Delete ${name} from disk? This cannot be undone.`)) return;
@@ -174,13 +231,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const card = document.createElement('div');
         card.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
         card.id = 'active-dl-' + name.replace(/\//g, '_');
+        const params = extractParams(name);
+        const sizeBadge = params > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${params}B ${estimateSize(params)}</span>` : '';
         card.innerHTML = `
             <div class="flex items-center justify-between">
                 <div class="min-w-0 flex-1">
-                    <p class="text-sm font-mono text-gray-100">${name}</p>
+                    <p class="text-sm font-mono text-gray-100">${name} ${sizeBadge}</p>
                     <span class="dl-info text-xs text-gray-400">Checking...</span>
                 </div>
                 <button onclick="cancelActiveDownload('${name}', this)"
+                    data-tip="Cancel download of ${name}"
                     class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
             </div>
             <div class="dl-progress mt-2">
@@ -266,9 +326,11 @@ function pollActiveDownload(name, card) {
                 }
                 const speedMatch = data.message.match(/([\d.,]+\s*[MG]B\/s)/);
                 const etaMatch = data.message.match(/ETA\s+([\d:]+)/);
+                const sizeMatch = data.message.match(/([\d.,]+\s*[MG]B)\s*\/\s*([\d.,]+\s*[MG]B)/);
                 let details = [];
                 const allPct = [...data.message.matchAll(/(\d+[\.,]\d+)%/g)];
                 if (allPct.length) details.push(`${Math.round(parseFloat(allPct[allPct.length-1][1].replace(',','.')))}%`);
+                if (sizeMatch) details.push(`${sizeMatch[1]} / ${sizeMatch[2]}`);
                 if (speedMatch) details.push(speedMatch[1]);
                 if (etaMatch) details.push(`ETA ${etaMatch[1]}`);
                 info.textContent = details.join(' · ');
@@ -303,10 +365,11 @@ async function startDownload(name, btn) {
         dlCard.innerHTML = `
             <div class="flex items-center justify-between">
                 <div class="min-w-0 flex-1">
-                    <p class="text-sm font-mono text-gray-100">${name}</p>
+                    <p class="text-sm font-mono text-gray-100">${name} ${extractParams(name) > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${extractParams(name)}B ${estimateSize(extractParams(name))}</span>` : ''}</p>
                     <span class="dl-info text-xs text-gray-400">Starting...</span>
                 </div>
                 <button onclick="cancelActiveDownload('${name}', this)"
+                    data-tip="Cancel download"
                     class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
             </div>
             <div class="dl-progress mt-2">

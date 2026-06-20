@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A model entry from the LMS `/v1/models` API response.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Model {
     pub id: String,
@@ -9,29 +10,34 @@ pub struct Model {
     pub owned_by: String,
 }
 
+/// Wrapper for the LMS `/v1/models` JSON response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModelsResponse {
     pub data: Vec<Model>,
     pub object: String,
 }
 
+/// Runtime list and update status from `lms runtime`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RuntimeInfo {
     pub runtimes: String,
     pub update_status: String,
 }
 
+/// JSON body for model action requests (download, load, unload, delete).
 #[derive(Debug, Deserialize)]
 pub struct DownloadRequest {
     pub model_name: String,
 }
 
+/// Generic success/failure response for action endpoints.
 #[derive(Debug, Serialize)]
 pub struct CommandResult {
     pub success: bool,
     pub message: String,
 }
 
+/// Query parameters for search and log endpoints.
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
@@ -42,6 +48,7 @@ pub struct SearchQuery {
 
 // Parsed CLI output structures
 
+/// A model parsed from `lms ls` CLI output.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct LocalModel {
@@ -54,12 +61,14 @@ pub struct LocalModel {
     pub model_type: String, // "LLM" or "Embedding"
 }
 
+/// A model search result from `lms get` output.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub name: String,
     pub description: String,
 }
 
+/// A model from the HuggingFace Hub API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HfModel {
     #[serde(rename = "modelId")]
@@ -70,6 +79,7 @@ pub struct HfModel {
     pub likes: u64,
 }
 
+/// A model currently loaded in memory, parsed from `lms ps`.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct LoadedModel {
@@ -81,6 +91,7 @@ pub struct LoadedModel {
     pub device: String,
 }
 
+/// An inference runtime entry from `lms runtime ls`.
 #[derive(Debug, Clone)]
 pub struct RuntimeEntry {
     pub engine: String,
@@ -88,6 +99,7 @@ pub struct RuntimeEntry {
     pub format: String,
 }
 
+/// Parsed host hardware and system information.
 #[derive(Debug, Clone)]
 pub struct HostInfo {
     pub hostname: String,
@@ -103,6 +115,7 @@ pub struct HostInfo {
     pub os: String,
 }
 
+/// Parse pipe-delimited host info string into a [`HostInfo`] struct.
 pub fn parse_host_info(output: &str) -> HostInfo {
     let parts: Vec<&str> = output.trim().split('|').collect();
     HostInfo {
@@ -248,25 +261,81 @@ pub fn parse_search_results(output: &str) -> Vec<SearchResult> {
     results
 }
 
-/// Parse `lms ps` output into structured entries
+/// Parse `lms ps` output into structured entries.
+///
+/// Uses header column positions when available to correctly extract fields.
 pub fn parse_loaded_models(output: &str) -> Vec<LoadedModel> {
     let mut models = Vec::new();
     let lines: Vec<&str> = output.lines().collect();
 
-    // Skip header lines (IDENTIFIER, STATUS, etc.)
-    for line in &lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("IDENTIFIER")
-            || trimmed.starts_with("STATUS")
-            || trimmed.starts_with("PARALLEL")
-        {
-            continue;
+    // Find header line to determine column positions
+    let header_idx = lines.iter().position(|l| l.contains("IDENTIFIER"));
+
+    // Try position-based parsing using header offsets
+    if let Some(hi) = header_idx {
+        let header = lines[hi];
+        let status_col = header.find("STATUS");
+        let size_col = header.find("SIZE");
+        let context_col = header.find("CONTEXT");
+        let parallel_col = header.find("PARALLEL");
+        let device_col = header.find("DEVICE");
+
+        for line in &lines[hi + 1..] {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Extract by column positions if available
+            let identifier = line.split_whitespace().next().unwrap_or("").to_string();
+            if identifier.is_empty() {
+                continue;
+            }
+
+            let model = line.split_whitespace().nth(1).unwrap_or("").to_string();
+
+            let status = if let Some(sc) = status_col {
+                let end = size_col.unwrap_or(line.len()).min(line.len());
+                if sc < line.len() {
+                    line.get(sc..end).unwrap_or("").trim().to_string()
+                } else { String::new() }
+            } else { String::new() };
+
+            let size = if let (Some(sc), Some(ec)) = (size_col, context_col) {
+                if sc < line.len() {
+                    line.get(sc..ec.min(line.len())).unwrap_or("").trim().to_string()
+                } else { String::new() }
+            } else { String::new() };
+
+            let context = if let (Some(sc), Some(ec)) = (context_col, parallel_col.or(device_col)) {
+                if sc < line.len() {
+                    line.get(sc..ec.min(line.len())).unwrap_or("").trim().to_string()
+                } else { String::new() }
+            } else { String::new() };
+
+            let device = if let Some(dc) = device_col {
+                if dc < line.len() {
+                    line.get(dc..).unwrap_or("").split_whitespace().next().unwrap_or("").to_string()
+                } else { String::new() }
+            } else { String::new() };
+
+            models.push(LoadedModel { identifier, model, status, size, context, device });
         }
-        let cols: Vec<&str> = trimmed.split_whitespace().collect();
-        if cols.len() >= 2 && cols[0].contains('/') {
+    } else {
+        // Fallback: keyword-based parsing
+        for line in &lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("No models") {
+                continue;
+            }
+
+            let cols: Vec<&str> = trimmed.split_whitespace().collect();
+            if cols.len() < 2 {
+                continue;
+            }
+
             let identifier = cols[0].to_string();
-            let model = if cols.len() > 1 && cols[1].contains('/') { cols[1].to_string() } else { identifier.clone() };
+            let model = cols[1].to_string();
             let status = cols.iter().find(|c| ["IDLE", "PROCESSING", "LOADING"].contains(c)).unwrap_or(&"").to_string();
             let size = cols.iter().zip(cols.iter().skip(1))
                 .find(|(a, b)| a.parse::<f64>().is_ok() && (**b == "GB" || **b == "MB"))

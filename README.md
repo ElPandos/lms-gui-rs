@@ -11,15 +11,23 @@ Web dashboard for managing LM Studio models via the CLI and REST API.
 - **Search models**: Search available models on LM Studio Hub (filters already-downloaded)
 - **Delete models**: Remove models from disk
 - **Runtime status**: Check inference runtime versions, updates, and switch active runtime
+- **Chat**: Full chat interface with configurable settings (temperature, top_p, penalties)
+- **Speed tests**: Benchmark models with speed, latency, throughput, stability, and concurrency tests
+- **Multi-model testing**: Test all loaded or all available models with automatic load/unload/restore
+- **Test results**: Statistical analysis with graphs, outlier detection (sigma filtering), and comparison reports
 - **Server logs**: View LMS inference logs, app logs, and per-model download logs
 - **Traffic stats**: Live request/error/download counters with event log (auto-refresh)
 - **Host info**: CPU, RAM, GPU, disk, and uptime displayed on dashboard
+- **Database**: SQLite persistence for settings, chat history, and test results
+- **Export/Import**: Full data export and import via JSON
+- **Changelog**: Build info with git commit hash and recent commits
 
 ## Stack
 
 - **Rust** + **Axum** (async web framework)
 - **Askama** (compile-time HTML templates)
 - **reqwest** (HTTP client for LMS API)
+- **rusqlite** (SQLite database for persistence)
 - **regex** (ANSI escape code stripping)
 - **Tailwind CSS** (via CDN) + **htmx** (dynamic updates)
 - **SSH** (executes `lms` CLI commands on remote host, or local with `LMS_LOCAL=1`)

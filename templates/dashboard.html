@@ -40,15 +40,20 @@
 <div class="grid grid-cols-3 gap-6">
     <!-- Models Card -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
-        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3" title="Models available via the LM Studio API">Available Models</h2>
+        <h2 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3">Available Models</h2>
         <div class="space-y-2" id="available-models">
             {% for model in models %}
-            <div class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700" title="~/.lmstudio/models/lmstudio-community/{{ model.id }}">
-                <span class="text-sm font-mono truncate mr-2">{{ model.id }}</span>
+            <div class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700">
+                <div class="min-w-0 mr-2">
+                    <div class="flex items-center gap-1">
+                        <span class="text-sm font-mono truncate">{{ model.name }}</span>
+                        <span class="info-icon">i<span class="info-popup">~/.lmstudio/models/{{ model.name }}/</span></span>
+                    </div>
+                    <span class="text-xs text-gray-500">{{ model.params }} · {{ model.arch }} · {{ model.size }}</span>
+                </div>
                 <div class="flex gap-1 shrink-0">
-                    <button onclick="loadModel('{{ model.id }}', this)"
-                        class="text-xs bg-green-700 hover:bg-green-600 px-2 py-0.5 rounded transition"
-                        title="Load this model into GPU memory">Load</button>
+                    <button onclick="loadModel('{{ model.name }}', this)"
+                        class="text-xs bg-green-700 hover:bg-green-600 px-2 py-0.5 rounded transition">Load</button>
                 </div>
             </div>
             {% endfor %}
@@ -61,8 +66,12 @@
     <!-- Loaded Models -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
         <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold text-green-400 uppercase tracking-wide" title="Models currently loaded in memory">Loaded Models</h2>
-            <span class="text-xs text-gray-400" title="GPU VRAM used / total">Used: {{ gpu_mem }}</span>
+            <h2 class="text-sm font-semibold text-green-400 uppercase tracking-wide">Loaded Models</h2>
+            <div class="flex items-center gap-3">
+                <button onclick="unloadAll()" class="text-xs text-red-400 hover:text-red-300 transition">Unload All</button>
+                <span id="gpu-mem" class="text-xs text-gray-400">VRAM: {{ gpu_mem }}</span>
+                <button onclick="refreshLoadedModels()" class="text-xs text-gray-400 hover:text-gray-200 transition">⟳</button>
+            </div>
         </div>
         <div id="loaded-content">
             {% if loaded_models.is_empty() %}
@@ -73,7 +82,15 @@
                 <div class="bg-gray-900 rounded p-3 border border-gray-700">
                     <div class="flex items-center justify-between">
                         <span class="text-sm font-mono text-gray-100">{{ m.identifier }}</span>
-                        <span class="text-xs px-2 py-0.5 rounded {% if m.status == "IDLE" %}bg-green-900 text-green-300{% else %}bg-yellow-900 text-yellow-300{% endif %}">{{ m.status }}</span>
+                        {% if m.status == "IDLE" %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-green-900 text-green-300">IDLE</span>
+                        {% else if m.status == "PROCESSING" || m.status == "PROCESSINGPROMPT" %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-yellow-900 text-yellow-300">PROCESSING PROMPT</span>
+                        {% else if m.status == "LOADING" %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-blue-900 text-blue-300">LOADING</span>
+                        {% else if !m.status.is_empty() %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-cyan-900 text-cyan-300">{{ m.status }}</span>
+                        {% endif %}
                     </div>
                     <div class="flex items-center justify-between mt-1">
                         <div class="flex gap-4 text-xs text-gray-400">
@@ -82,8 +99,7 @@
                             {% if !m.device.is_empty() %}<span>{{ m.device }}</span>{% endif %}
                         </div>
                         <button onclick="unloadModel('{{ m.identifier }}', this)"
-                            class="text-xs bg-red-700 hover:bg-red-600 px-2 py-0.5 rounded transition"
-                            title="Unload this model from memory">Unload</button>
+                            class="text-xs bg-red-700 hover:bg-red-600 px-2 py-0.5 rounded transition">Unload</button>
                     </div>
                 </div>
                 {% endfor %}
@@ -94,7 +110,7 @@
 
     <!-- Runtime Cards -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
-        <h2 class="text-sm font-semibold text-purple-400 uppercase tracking-wide mb-3" title="Installed inference runtimes">Runtime</h2>
+        <h2 class="text-sm font-semibold text-purple-400 uppercase tracking-wide mb-3" data-tip="Installed inference runtimes">Runtime</h2>
         {% if runtimes.is_empty() %}
         <p class="text-gray-500 text-sm italic">No runtimes found</p>
         {% else %}
@@ -129,13 +145,17 @@
 async function loadModel(name, btn) {
     document.getElementById('error-card').classList.add('hidden');
     await apiPost('/models/load', {model_name: name}, btn);
-    document.getElementById('loaded-content').innerHTML = `
-        <div class="bg-gray-900 rounded p-3 border border-yellow-700">
+    const loadingCard = `
+        <div class="bg-gray-900 rounded p-3 border border-yellow-700 mt-2" id="loading-card">
             <div class="flex items-center gap-2">
                 <span class="spinner"></span>
                 <span class="text-sm text-yellow-300">Loading ${name}...</span>
             </div>
         </div>`;
+    const container = document.getElementById('loaded-content');
+    const noModels = container.querySelector('p.italic');
+    if (noModels) noModels.remove();
+    container.insertAdjacentHTML('beforeend', loadingCard);
     pollLoadStatus(name);
 }
 
@@ -163,8 +183,29 @@ async function pollLoadStatus(name) {
     }, 3000);
 }
 async function unloadModel(name, btn) {
-    await apiPost('/models/unload', {model_name: name}, btn);
-    setTimeout(refreshLoadedModels, 2000);
+    btn.classList.add('btn-loading');
+    btn.innerHTML = '<span class="spinner"></span>';
+    await apiPost('/models/unload', {model_name: name});
+    const poll = setInterval(async () => {
+        try {
+            const resp = await fetch('/api/models/loaded');
+            const data = await resp.json();
+            if (!data.output.includes(name.split(':')[0])) {
+                clearInterval(poll);
+                showToast(`Unloaded ${name}`, false);
+                await refreshLoadedModels();
+            }
+        } catch(e) { clearInterval(poll); await refreshLoadedModels(); }
+    }, 2000);
+}
+
+async function unloadAll() {
+    document.querySelectorAll('#loaded-content .bg-gray-900').forEach(card => {
+        card.classList.add('flash-red');
+    });
+    await apiPost('/models/unload', {model_name: '--all'});
+    showToast('Unloading all models...', false);
+    setTimeout(refreshLoadedModels, 3000);
 }
 async function refreshLoadedModels() {
     try {
@@ -174,9 +215,18 @@ async function refreshLoadedModels() {
         const doc = parser.parseFromString(html, 'text/html');
         const newLoaded = doc.getElementById('loaded-content');
         if (newLoaded) document.getElementById('loaded-content').innerHTML = newLoaded.innerHTML;
+        const newGpuMem = doc.getElementById('gpu-mem');
+        if (newGpuMem) document.getElementById('gpu-mem').textContent = newGpuMem.textContent;
         const newModels = doc.getElementById('available-models');
         if (newModels) document.getElementById('available-models').innerHTML = newModels.innerHTML;
+        // Flash loaded model cards
+        document.querySelectorAll('#loaded-content .bg-gray-900').forEach(card => {
+            card.classList.add('flash');
+            setTimeout(() => card.classList.remove('flash'), 2000);
+        });
     } catch(e) {}
 }
+
+// Auto-refresh removed — use refresh button instead
 </script>
 {% endblock %}

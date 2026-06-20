@@ -1,0 +1,991 @@
+{% extends "base.html" %}
+{% block title %}Chat — LMS{% endblock %}
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+    <!-- Settings Panel -->
+    <div class="lg:col-span-1 space-y-4">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h3 class="text-sm font-semibold text-blue-400 uppercase tracking-wide mb-3">Settings</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Select a model. Loaded models are ready immediately. Unloaded models will be warmed up on selection.</span></span> Model</label>
+                    <select id="chat-model" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200" onchange="onModelChange()">
+                        {% for (name, is_loaded) in all_models %}
+                        <option value="{{ name }}" {% if is_loaded %}selected{% endif %}>{{ name }}{% if is_loaded %} ● loaded{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <span id="warmup-status" class="text-[10px] text-gray-500 mt-1 block"></span>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Instructions that define the AI's behavior. Sets the context and personality for all messages in the conversation.</span></span> System Prompt</label>
+                    <textarea id="chat-system" rows="2" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200" placeholder="Optional system prompt..."></textarea>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Controls randomness. 0 = deterministic (same input → same output). 2 = very creative/random. Default 0.7 is a good balance.</span></span> Temperature: <span id="temp-val">0.7</span></label>
+                    <input type="range" id="chat-temp" min="0" max="2" step="0.1" value="0.7" class="w-full" oninput="document.getElementById('temp-val').textContent=this.value">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Maximum number of tokens (words/subwords) the model can generate in its response. Higher = longer responses allowed.</span></span> Max Tokens</label>
+                    <input type="number" id="chat-max-tokens" value="1024" min="1" max="32768" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Nucleus sampling. Only considers tokens whose cumulative probability is within top_p. 1.0 = consider all tokens. 0.1 = only the top 10% probability tokens.</span></span> Top P: <span id="topp-val">1.0</span></label>
+                    <input type="range" id="chat-top-p" min="0" max="1" step="0.05" value="1.0" class="w-full" oninput="document.getElementById('topp-val').textContent=this.value">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Penalizes tokens based on how often they already appeared. Higher values reduce repetition. Range 0-2.</span></span> Frequency Penalty: <span id="fp-val">0</span></label>
+                    <input type="range" id="chat-fp" min="0" max="2" step="0.1" value="0" class="w-full" oninput="document.getElementById('fp-val').textContent=this.value">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Penalizes tokens that have appeared at all, regardless of frequency. Encourages the model to talk about new topics. Range 0-2.</span></span> Presence Penalty: <span id="pp-val">0</span></label>
+                    <input type="range" id="chat-pp" min="0" max="2" step="0.1" value="0" class="w-full" oninput="document.getElementById('pp-val').textContent=this.value">
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Management -->
+        <details class="bg-gray-800 rounded-lg border border-gray-700">
+            <summary class="text-sm font-semibold text-gray-400 uppercase tracking-wide p-4 cursor-pointer hover:bg-gray-700/30">Data</summary>
+            <div class="px-4 pb-4 space-y-2">
+                <button onclick="exportData()" class="w-full text-xs bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded transition">↑ Export All Data</button>
+                <label class="w-full text-xs bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded transition block text-center cursor-pointer">↓ Import Data
+                    <input type="file" accept=".json" onchange="importData(event)" class="hidden">
+                </label>
+            </div>
+        </details>
+
+        <!-- Tests Panel -->
+        <details class="bg-gray-800 rounded-lg border border-gray-700">
+            <summary class="text-sm font-semibold text-yellow-400 uppercase tracking-wide p-4 cursor-pointer hover:bg-gray-700/30">Tests</summary>
+            <div class="px-4 pb-4 space-y-3">
+                <!-- Test Type -->
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup"><span class="text-yellow-400">Speed:</span> measures total response time per call.<br><span class="text-cyan-400">Latency:</span> measures time-to-first-token.<br><span class="text-green-400">Throughput:</span> measures tokens generated per second.<br><span class="text-purple-400">Stability:</span> measures consistency over time.<br><span class="text-red-400">Concurrency:</span> measures performance under parallel load.</span></span> Test Type</label>
+                    <select id="st-type" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200" onchange="updateTestUI()">
+                        <option value="speed" selected>⚡ Speed (response time)</option>
+                        <option value="latency">⏱ Latency (time to first token)</option>
+                        <option value="throughput">📊 Throughput (tokens/sec)</option>
+                        <option value="stability">📈 Stability (consistency)</option>
+                        <option value="concurrency">🔀 Concurrency (parallel load)</option>
+                    </select>
+                </div>
+                <!-- Number of calls -->
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">How many timed requests to send after the warmup call. More calls give more accurate averages but take longer.</span></span> Number of calls</label>
+                    <select id="st-calls" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200" onchange="document.getElementById('st-calls-manual').style.display=this.value==='custom'?'block':'none'">
+                        <option value="10" selected>10 calls</option>
+                        <option value="50">50 calls</option>
+                        <option value="100">100 calls</option>
+                        <option value="custom">Manual</option>
+                    </select>
+                    <input type="number" id="st-calls-manual" min="1" max="500" value="25" style="display:none" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200" placeholder="Custom number of calls">
+                </div>
+                <!-- Max tokens -->
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Maximum tokens per response. For latency tests use low (16). For throughput tests use high (256+). For speed tests use 64.</span></span> Max Tokens (per call)</label>
+                    <input type="number" id="st-max-tokens" value="64" min="1" max="4096" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200">
+                </div>
+                <!-- Concurrency (only for concurrency test) -->
+                <div id="st-concurrency-row" class="hidden">
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Number of parallel requests sent simultaneously. Tests how the model handles concurrent load.</span></span> Parallel requests</label>
+                    <select id="st-concurrency" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200">
+                        <option value="2">2 parallel</option>
+                        <option value="4" selected>4 parallel</option>
+                        <option value="8">8 parallel</option>
+                    </select>
+                </div>
+                <!-- Sigma filter -->
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup">Statistical outlier filter. 1σ removes ~32% of data (strict), 2σ removes ~5% (standard), 3σ removes ~0.3% (permissive). Outliers are marked red in the graph.</span></span> Outlier Filter (σ)</label>
+                    <select id="st-sigma" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200">
+                        <option value="0">No filtering</option>
+                        <option value="1">1σ (68% — strict)</option>
+                        <option value="2" selected>2σ (95% — standard)</option>
+                        <option value="3">3σ (99.7% — permissive)</option>
+                    </select>
+                </div>
+                <!-- Test Scope -->
+                <div>
+                    <label class="text-xs text-gray-400 flex items-center gap-1"><span class="info-icon">i<span class="info-popup"><span class="text-blue-400">Single:</span> test selected model only.<br><span class="text-green-400">Loaded:</span> test all models currently in memory.<br><span class="text-yellow-400">All available:</span> load and test every model one by one.</span></span> Test Scope</label>
+                    <select id="st-scope" class="w-full mt-1 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-gray-200">
+                        <option value="single" selected>Single model</option>
+                        <option value="loaded">All loaded models</option>
+                        <option value="all">All available models</option>
+                    </select>
+                </div>
+                <button onclick="runTest()" id="st-btn"
+                    class="w-full text-xs bg-yellow-600 hover:bg-yellow-700 px-3 py-2 rounded transition font-medium">▶ Run Test</button>
+            </div>
+        </details>
+    </div>
+
+    <!-- Chat Area -->
+    <div class="lg:col-span-3 flex flex-col">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 flex flex-col" style="height: calc(100vh - 10rem);">
+            <!-- Messages -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-3">
+                <p class="text-gray-500 text-sm italic text-center">Select a model and start chatting, or run a speed test.</p>
+            </div>
+            <!-- Input -->
+            <div class="border-t border-gray-700 p-3">
+                <form onsubmit="sendMessage(event)" class="flex gap-2">
+                    <input type="text" id="chat-input" placeholder="Type a message..."
+                        class="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+                    <button type="submit" id="chat-send-btn"
+                        class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-medium transition">Send</button>
+                    <button type="button" onclick="clearChat()"
+                        class="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded text-sm transition text-gray-400" data-tip="Clear chat history">✕</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+async function sendMessage(e) {
+    e.preventDefault();
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+
+    const model = document.getElementById('chat-model').value;
+    if (!model) { showToast('No model selected', true); return; }
+
+    const settings = {
+        model,
+        message: msg,
+        temperature: parseFloat(document.getElementById('chat-temp').value),
+        max_tokens: parseInt(document.getElementById('chat-max-tokens').value),
+        top_p: parseFloat(document.getElementById('chat-top-p').value),
+        frequency_penalty: parseFloat(document.getElementById('chat-fp').value),
+        presence_penalty: parseFloat(document.getElementById('chat-pp').value),
+        system_prompt: document.getElementById('chat-system').value || null,
+    };
+
+    appendMessage('user', msg, { model, settings });
+    // Save user message to DB
+    fetch('/api/chat/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ role: 'user', model, content: msg, settings_json: JSON.stringify(settings) }) });
+
+    const thinkingEl = appendMessage('assistant', '<span class="spinner"></span> Thinking...', { model });
+
+    try {
+        const resp = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings) });
+        const data = await resp.json();
+        thinkingEl.innerHTML = formatAssistant(data.content, data.duration_ms, data.tokens_used, model, settings, data);
+        if (!data.success) thinkingEl.classList.add('border-red-700');
+        // Save assistant response to DB
+        fetch('/api/chat/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ role: 'assistant', model, content: data.content || '', response_json: JSON.stringify(data), duration_ms: data.duration_ms, tokens: data.tokens_used }) });
+    } catch(e) {
+        thinkingEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+    }
+    scrollChat();
+}
+
+let msgCounter = 0;
+
+function getTimestamp() {
+    const d = new Date();
+    const date = d.toLocaleDateString('en-GB', {day:'2-digit',month:'short'});
+    const time = d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const ms = String(d.getMilliseconds()).padStart(3,'0');
+    return `${date} ${time}.${ms}`;
+}
+
+function appendMessage(role, html, meta = {}) {
+    const container = document.getElementById('chat-messages');
+    const placeholder = container.querySelector('p.italic');
+    if (placeholder) placeholder.remove();
+    msgCounter++;
+    const id = 'msg-' + msgCounter;
+    const time = getTimestamp();
+    const modelBadge = meta.model ? `<span class="text-[10px] text-gray-500 font-mono">${meta.model}</span>` : '';
+
+    const div = document.createElement('div');
+    if (role === 'user') {
+        div.className = 'flex justify-start';
+        div.innerHTML = `<div class="bg-blue-900/50 border border-blue-700 rounded-lg px-3 py-2 w-full text-sm text-gray-100">
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2"><span class="text-[10px] text-blue-400 uppercase font-semibold">You</span>${modelBadge}</div>
+                <span class="text-[10px] text-gray-500">${time}</span>
+            </div>
+            <div class="whitespace-pre-wrap">${escapeHtml(html)}</div>
+        </div>`;
+    } else {
+        div.className = 'flex justify-start';
+        div.innerHTML = `<div class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 w-full text-sm text-gray-200" id="${id}">
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2"><span class="text-[10px] text-green-400 uppercase font-semibold">Assistant</span>${modelBadge}</div>
+                <span class="text-[10px] text-gray-500">${time}</span>
+            </div>
+            ${html}
+        </div>`;
+    }
+    container.appendChild(div);
+    scrollChat();
+    return div.querySelector(`#${id}`) || div.firstElementChild;
+}
+
+function formatAssistant(content, ms, tokens, model, settings, rawResp) {
+    const settingsStr = escapeHtml(JSON.stringify(settings, null, 2));
+    const exchange = JSON.stringify({ request: settings, response: rawResp }, null, 2);
+    const b64 = btoa(unescape(encodeURIComponent(exchange)));
+    return `<div class="whitespace-pre-wrap msg-content">${escapeHtml(content)}</div>
+        <div class="flex items-center gap-3 mt-2 pt-1 border-t border-gray-700/50">
+            <span class="text-[10px] text-gray-500">${ms}ms · ${tokens} tok</span>
+            <span onmouseenter="showJsonPopup(this,'${b64}')" onmouseleave="hideJsonPopup()" class="info-icon" style="margin-left:auto;font-size:10px;width:18px;height:18px;color:#e5e7eb">{ }</span>
+            <button onclick="copyMsg(this)" class="hover:text-gray-300 transition" style="font-size:14px;color:#9ca3af" data-tip="Copy response">❐</button>
+        </div>`;
+}
+
+function downloadJson(b64, filename) {
+    const json = decodeURIComponent(escape(atob(b64)));
+    const blob = new Blob([json], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+}
+
+function showJsonPopup(btn, b64) {
+    const existing = document.getElementById('json-popup');
+    if (existing) existing.remove();
+
+    const json = decodeURIComponent(escape(atob(b64)));
+    const popup = document.createElement('div');
+    popup.id = 'json-popup';
+    popup.onmouseenter = () => popup.dataset.hover = '1';
+    popup.onmouseleave = () => { delete popup.dataset.hover; popup.remove(); };
+    popup.style.cssText = 'position:fixed;z-index:100;background:#1f2937;border:1px solid #4b5563;border-radius:8px;padding:0;box-shadow:0 8px 24px rgba(0,0,0,0.6);width:340px;display:flex;flex-direction:column;';
+    popup.innerHTML = `<div style="max-height:280px;overflow:auto;padding:10px"><pre style="margin:0;font-size:10px;font-family:monospace;color:#d1d5db;white-space:pre-wrap">${json.replace(/</g,'&lt;')}</pre></div>
+        <div onclick="downloadJson('${b64}','chat-${Date.now()}.json');document.getElementById('json-popup').remove()" style="padding:6px;border-top:1px solid #374151;text-align:center;cursor:pointer;color:#fbbf24;font-size:11px;background:#1a1a2e;border-radius:0 0 8px 8px">Download JSON</div>`;
+
+    document.body.appendChild(popup);
+
+    const rect = btn.getBoundingClientRect();
+    const midY = window.innerHeight / 2;
+    let top = rect.top < midY ? rect.bottom + 4 : rect.top - popup.offsetHeight - 4;
+    let left = rect.right - popup.offsetWidth;
+    if (left < 8) left = 8;
+    popup.style.top = top + 'px';
+    popup.style.left = left + 'px';
+}
+
+function hideJsonPopup() {
+    setTimeout(() => {
+        const popup = document.getElementById('json-popup');
+        if (popup && !popup.dataset.hover) popup.remove();
+    }, 100);
+}
+
+function copyMsg(btn) {
+    const bubble = btn.closest('.rounded-lg');
+    const content = bubble ? bubble.querySelector('.msg-content') : null;
+    if (content) {
+        const text = content.textContent;
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = '✓';
+        setTimeout(() => btn.textContent = '❐', 2000);
+    }
+}
+
+// Latency Test — measures time-to-first-token using streaming
+async function runLatencyTest() {
+    const model = document.getElementById('chat-model').value;
+    if (!model) { showToast('No model selected', true); return; }
+    const btn = document.getElementById('st-btn');
+    btn.classList.add('btn-loading'); btn.innerHTML = '<span class="spinner"></span> Running...';
+    const sel = document.getElementById('st-calls');
+    const numCalls = sel.value === 'custom' ? parseInt(document.getElementById('st-calls-manual').value) : parseInt(sel.value);
+    const sigma = parseInt(document.getElementById('st-sigma').value);
+    const maxTokens = parseInt(document.getElementById('st-max-tokens').value);
+    const estimatedSec = Math.round(numCalls * 0.8);
+    appendMessage('assistant', `<span class="text-yellow-400">⏱ Latency Test:</span> ${model} — ${numCalls} calls, max_tokens=${maxTokens}<br><span class="spinner"></span> Measuring time-to-first-token... <span id="st-eta">ETA ~${estimatedSec}s</span>`, { model });
+    let remaining = estimatedSec;
+    const etaInterval = setInterval(() => { remaining--; const el = document.getElementById('st-eta'); if (el && remaining > 0) el.textContent = `ETA ~${remaining}s`; else if (el) el.textContent = 'finishing...'; }, 1000);
+    try {
+        const resp = await fetch('/chat/speedtest', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ model, num_calls: numCalls, sigma, max_tokens: maxTokens }) });
+        const data = await resp.json();
+        clearInterval(etaInterval);
+        // Reframe as latency results
+        data.stats.test_type = 'Latency (TTFT approximation)';
+        renderSpeedTestResults(data);
+    } catch(e) { clearInterval(etaInterval); appendMessage('assistant', `<span class="text-red-400">Test failed: ${e.message}</span>`); }
+    btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
+}
+
+// Throughput Test — measures tokens generated per second
+async function runThroughputTest() {
+    const model = document.getElementById('chat-model').value;
+    if (!model) { showToast('No model selected', true); return; }
+    const btn = document.getElementById('st-btn');
+    btn.classList.add('btn-loading'); btn.innerHTML = '<span class="spinner"></span> Running...';
+    const sel = document.getElementById('st-calls');
+    const numCalls = sel.value === 'custom' ? parseInt(document.getElementById('st-calls-manual').value) : parseInt(sel.value);
+    const sigma = parseInt(document.getElementById('st-sigma').value);
+    const maxTokens = parseInt(document.getElementById('st-max-tokens').value);
+    const estimatedSec = Math.round(numCalls * 2);
+    appendMessage('assistant', `<span class="text-yellow-400">📊 Throughput Test:</span> ${model} — ${numCalls} calls, max_tokens=${maxTokens}<br><span class="spinner"></span> Measuring tokens/second... <span id="st-eta">ETA ~${estimatedSec}s</span>`, { model });
+    let remaining = estimatedSec;
+    const etaInterval = setInterval(() => { remaining--; const el = document.getElementById('st-eta'); if (el && remaining > 0) el.textContent = `ETA ~${remaining}s`; else if (el) el.textContent = 'finishing...'; }, 1000);
+    try {
+        const resp = await fetch('/chat/speedtest', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ model, num_calls: numCalls, sigma, max_tokens: maxTokens }) });
+        const data = await resp.json();
+        clearInterval(etaInterval);
+        // Calculate throughput metrics
+        const throughputs = data.results.map(r => r.tokens > 0 ? (r.tokens / (r.duration_ms / 1000)).toFixed(1) : 0);
+        const avgThroughput = (throughputs.reduce((a,b) => a + parseFloat(b), 0) / throughputs.length).toFixed(1);
+        const container = document.getElementById('chat-messages');
+        const last = container.lastElementChild; if (last) last.remove();
+        stCounter++;
+        const chartId = 'st-chart-' + stCounter;
+        const statsHtml = `
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-yellow-400 font-semibold">📊 Throughput Results</div>
+                <div class="flex items-center gap-2">
+                    <button onclick="starTest('test-${stCounter}')" id="star-test-${stCounter}" class="text-gray-500 hover:text-yellow-400 transition text-sm" data-tip="Save to database">☆</button>
+                    <button onclick="deleteTestCard(this)" class="text-gray-500 hover:text-red-400 transition text-sm" data-tip="Remove from chat">✕</button>
+                </div>
+            </div>
+            <div class="text-xs text-gray-300 space-y-1">
+                <div>Avg Throughput: <span class="text-white">${avgThroughput} tok/s</span></div>
+                <div>Mean Latency: <span class="text-white">${data.stats.mean_ms.toFixed(1)}ms</span> · Tokens/call: <span class="text-white">${(data.results.reduce((a,r) => a+r.tokens, 0) / data.results.length).toFixed(0)}</span></div>
+                <div>Min: <span class="text-white">${data.stats.min_ms}ms</span> · Max: <span class="text-white">${data.stats.max_ms}ms</span></div>
+            </div>
+            <canvas id="${chartId}" class="mt-3" style="width:100%;height:200px;"></canvas>
+            <div class="mt-2 flex gap-4 text-xs text-gray-500">
+                <span>● <span class="text-blue-400">Normal</span></span>
+                <span>● <span class="text-red-400">Outlier</span></span>
+            </div>`;
+        storeTestData('test-' + stCounter, { test_type: 'throughput', model, results: data.results, stats: data.stats, max_tokens: maxTokens });
+        appendMessage('assistant', statsHtml, { model });
+        setTimeout(() => drawChart(data.results, chartId), 50);
+    window._chartData[chartId] = data.results; saveChatState();
+    } catch(e) { clearInterval(etaInterval); appendMessage('assistant', `<span class="text-red-400">Test failed: ${e.message}</span>`); }
+    btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
+}
+
+// Concurrency Test — sends parallel requests
+async function runConcurrencyTest() {
+    const model = document.getElementById('chat-model').value;
+    if (!model) { showToast('No model selected', true); return; }
+    const btn = document.getElementById('st-btn');
+    btn.classList.add('btn-loading'); btn.innerHTML = '<span class="spinner"></span> Running...';
+    const sel = document.getElementById('st-calls');
+    const numCalls = sel.value === 'custom' ? parseInt(document.getElementById('st-calls-manual').value) : parseInt(sel.value);
+    const parallel = parseInt(document.getElementById('st-concurrency').value);
+    const maxTokens = parseInt(document.getElementById('st-max-tokens').value);
+    const sigma = parseInt(document.getElementById('st-sigma').value);
+
+    appendMessage('assistant', `<span class="text-yellow-400">🔀 Concurrency Test:</span> ${model} — ${numCalls} calls, ${parallel} parallel, max_tokens=${maxTokens}<br><span class="spinner"></span> Running...`, { model });
+
+    const prompts = [];
+    for (let i = 0; i < numCalls; i++) prompts.push(SPEED_PROMPTS[i % SPEED_PROMPTS.length]);
+
+    const results = [];
+    // Send in batches of `parallel`
+    for (let i = 0; i < prompts.length; i += parallel) {
+        const batch = prompts.slice(i, i + parallel);
+        const batchResults = await Promise.all(batch.map(async (prompt, j) => {
+            const start = performance.now();
+            try {
+                const resp = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, message: prompt, temperature: 0, max_tokens: maxTokens, system_prompt: 'Reply briefly.' }) });
+                const data = await resp.json();
+                return { index: i + j + 1, duration_ms: Math.round(performance.now() - start), tokens: data.tokens_used || 0, prompt, response: data.content || '', outlier: false };
+            } catch(e) {
+                return { index: i + j + 1, duration_ms: Math.round(performance.now() - start), tokens: 0, prompt, response: 'error', outlier: false };
+            }
+        }));
+        results.push(...batchResults);
+    }
+
+    // Stats
+    const durations = results.map(r => r.duration_ms);
+    const mean = durations.reduce((a,b) => a+b, 0) / durations.length;
+    const variance = durations.map(d => (d - mean) ** 2).reduce((a,b) => a+b, 0) / durations.length;
+    const stdDev = Math.sqrt(variance);
+    if (sigma > 0) results.forEach(r => { if (Math.abs(r.duration_ms - mean) > stdDev * sigma) r.outlier = true; });
+    const filtered = results.filter(r => !r.outlier);
+    const filteredMean = filtered.length ? filtered.reduce((a,r) => a + r.duration_ms, 0) / filtered.length : mean;
+    const sorted = [...durations].sort((a,b) => a-b);
+    const median = sorted.length % 2 === 0 ? (sorted[sorted.length/2-1] + sorted[sorted.length/2])/2 : sorted[Math.floor(sorted.length/2)];
+
+    const container = document.getElementById('chat-messages');
+    const last = container.lastElementChild; if (last) last.remove();
+    stCounter++;
+    const chartId = 'st-chart-' + stCounter;
+    const statsHtml = `
+        <div class="flex items-center justify-between mb-2">
+            <div class="text-yellow-400 font-semibold">🔀 Concurrency Results (${parallel} parallel)</div>
+            <div class="flex items-center gap-2">
+                <button onclick="starTest('test-${stCounter}')" id="star-test-${stCounter}" class="text-gray-500 hover:text-yellow-400 transition text-sm" data-tip="Save to database">☆</button>
+                <button onclick="deleteTestCard(this)" class="text-gray-500 hover:text-red-400 transition text-sm" data-tip="Remove from chat">✕</button>
+            </div>
+        </div>
+        <div class="text-xs text-gray-300 space-y-1">
+            <div>Mean: <span class="text-white">${mean.toFixed(1)}ms</span> · Median: <span class="text-white">${median.toFixed(1)}ms</span></div>
+            <div>Min: <span class="text-white">${Math.min(...durations)}ms</span> · Max: <span class="text-white">${Math.max(...durations)}ms</span> · StdDev: <span class="text-white">${stdDev.toFixed(1)}ms</span></div>
+            ${sigma > 0 ? `<div>Filtered (${sigma}σ): <span class="text-green-400">${filteredMean.toFixed(1)}ms</span> (${filtered.length}/${results.length} kept)</div>` : ''}
+            <div>Effective throughput: <span class="text-white">${(results.length / (durations.reduce((a,b)=>a+b,0) / 1000 / parallel)).toFixed(1)} req/s</span></div>
+        </div>
+        <canvas id="${chartId}" class="mt-3" style="width:100%;height:200px;"></canvas>
+        <div class="mt-2 flex gap-4 text-xs text-gray-500">
+            <span>● <span class="text-blue-400">Normal</span></span>
+            <span>● <span class="text-red-400">Outlier</span></span>
+        </div>`;
+    storeTestData('test-' + stCounter, { test_type: 'concurrency', model, results, stats: { mean_ms: mean, median_ms: median, min_ms: Math.min(...durations), max_ms: Math.max(...durations), std_dev_ms: stdDev, filtered_mean_ms: filteredMean, total_calls: results.length, filtered_calls: filtered.length, sigma }, max_tokens: maxTokens });
+    appendMessage('assistant', statsHtml, { model });
+    window._chartData[chartId] = results;
+    setTimeout(() => { drawChart(results, chartId); saveChatState(); }, 50);
+    btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
+}
+
+const SPEED_PROMPTS = [
+    "What is 2+2? Reply with only the number.",
+    "Name the capital of France. Reply with only the city name.",
+    "What color is the sky on a clear day? Reply with one word.",
+    "How many legs does a cat have? Reply with only the number.",
+    "What is the chemical symbol for water? Reply with only the formula.",
+    "Name the largest planet in our solar system. Reply with only the name.",
+    "What is the boiling point of water in Celsius? Reply with only the number.",
+    "How many continents are there? Reply with only the number.",
+    "What is the square root of 64? Reply with only the number.",
+    "Name the first element on the periodic table. Reply with only the name.",
+    "What year did World War 2 end? Reply with only the number.",
+    "How many days are in a week? Reply with only the number.",
+    "What is the speed of light in km/s? Reply with only the number.",
+    "Name the author of Romeo and Juliet. Reply with only the name.",
+    "What is the freezing point of water in Fahrenheit? Reply with only the number.",
+    "How many letters in the English alphabet? Reply with only the number.",
+    "What is 10 multiplied by 10? Reply with only the number.",
+    "Name the smallest prime number. Reply with only the number.",
+    "What gas do humans breathe in? Reply with only the name.",
+    "How many hours in a day? Reply with only the number.",
+];
+
+function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function scrollChat() {
+    const el = document.getElementById('chat-messages');
+    el.scrollTop = el.scrollHeight;
+    saveChatState();
+}
+
+// Chat state persistence via sessionStorage
+function saveChatState() {
+    const el = document.getElementById('chat-messages');
+    if (el) {
+        sessionStorage.setItem('chat-messages', el.innerHTML);
+        sessionStorage.setItem('chat-charts', JSON.stringify(window._chartData || {}));
+    }
+}
+
+// Store chart data for restoration
+window._chartData = {};
+
+function restoreChatState() {
+    const saved = sessionStorage.getItem('chat-messages');
+    if (!document.referrer || !document.referrer.includes(location.host)) {
+        sessionStorage.removeItem('chat-messages');
+        sessionStorage.removeItem('chat-charts');
+        return;
+    }
+    if (saved) {
+        const el = document.getElementById('chat-messages');
+        el.innerHTML = saved;
+        el.scrollTop = el.scrollHeight;
+        // Redraw charts
+        const charts = JSON.parse(sessionStorage.getItem('chat-charts') || '{}');
+        window._chartData = charts;
+        Object.entries(charts).forEach(([id, results]) => {
+            setTimeout(() => drawChart(results, id), 50);
+        });
+    }
+}
+
+// Restore on page load
+document.addEventListener('DOMContentLoaded', restoreChatState);
+
+function clearChat() {
+    const el = document.getElementById('chat-messages');
+    el.innerHTML = '<p class="text-gray-500 text-sm italic text-center">Select a model and start chatting, or run a speed test.</p>';
+    sessionStorage.removeItem('chat-messages');
+    sessionStorage.removeItem('chat-charts');
+    window._chartData = {};
+    fetch('/api/chat/clear', { method: 'POST' });
+}
+
+async function exportData() {
+    const resp = await fetch('/api/export');
+    const data = await resp.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `lms-gui-export-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    showToast('Data exported', false);
+}
+
+async function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+        const data = JSON.parse(text);
+        const resp = await fetch('/api/import', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+        const result = await resp.json();
+        showToast(result.success ? 'Data imported successfully' : result.message, !result.success);
+    } catch(e) {
+        showToast('Invalid JSON file', true);
+    }
+}
+
+// Test card actions
+window._testStore = {};
+
+function storeTestData(testId, data) {
+    window._testStore[testId] = data;
+}
+
+function starTest(testId) {
+    const data = window._testStore[testId];
+    if (!data) { showToast('No test data found', true); return; }
+    const btn = document.getElementById('star-' + testId);
+    fetch('/api/tests/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        test_type: data.test_type || 'speed',
+        model: data.model || '',
+        num_calls: data.stats.total_calls || 0,
+        max_tokens: data.max_tokens || 64,
+        sigma: data.stats.sigma || 0,
+        results_json: JSON.stringify(data.results),
+        stats_json: JSON.stringify(data.stats),
+    }) }).then(() => {
+        if (btn) { btn.textContent = '★'; btn.classList.remove('text-gray-500'); btn.classList.add('text-yellow-400'); }
+        showToast('Test saved to database', false);
+    });
+}
+
+function deleteTestCard(btn) {
+    const bubble = btn.closest('.rounded-lg');
+    if (bubble) { bubble.parentElement.remove(); saveChatState(); }
+}
+
+// Tests
+let stCounter = 0;
+
+function updateTestUI() {
+    const type = document.getElementById('st-type').value;
+    document.getElementById('st-concurrency-row').classList.toggle('hidden', type !== 'concurrency');
+    const maxTok = document.getElementById('st-max-tokens');
+    if (type === 'latency') maxTok.value = 16;
+    else if (type === 'throughput') maxTok.value = 256;
+    else if (type === 'speed' || type === 'stability' || type === 'concurrency') maxTok.value = 64;
+}
+
+async function onModelChange() {
+    const model = document.getElementById('chat-model').value;
+    if (!model) return;
+    const status = document.getElementById('warmup-status');
+    status.textContent = '⏳ Loading & warming up...';
+    status.className = 'text-[10px] text-yellow-400 mt-1 block';
+    try {
+        // Load model if not loaded
+        await fetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
+        // Warmup call
+        await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, message: 'Hello', temperature: 0, max_tokens: 16 }) });
+        status.textContent = '✓ Ready';
+        status.className = 'text-[10px] text-green-400 mt-1 block';
+        setTimeout(() => status.textContent = '', 3000);
+    } catch(e) {
+        status.textContent = '✗ Warmup failed';
+        status.className = 'text-[10px] text-red-400 mt-1 block';
+    }
+}
+
+// Init selected model display
+(function() {
+    const sel = document.getElementById('chat-model');
+    if (sel && !sel.value) {
+        const first = sel.querySelector('option[value]');
+        if (first) sel.value = first.value;
+    }
+})();
+
+// Settings persistence
+const SETTING_IDS = ['chat-model', 'chat-temp', 'chat-max-tokens', 'chat-top-p', 'chat-fp', 'chat-pp', 'chat-system', 'st-calls', 'st-calls-manual', 'st-max-tokens', 'st-sigma', 'st-type', 'st-scope'];
+function saveSettings() {
+    const settings = {};
+    SETTING_IDS.forEach(id => { const el = document.getElementById(id); if (el) settings[id] = el.value; });
+    fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'chat_settings', value: JSON.stringify(settings) }) });
+}
+async function loadSettings() {
+    try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        const entry = data.find(([k]) => k === 'chat_settings');
+        if (entry) {
+            const settings = JSON.parse(entry[1]);
+            Object.entries(settings).forEach(([id, val]) => {
+                const el = document.getElementById(id);
+                if (el) { el.value = val; el.dispatchEvent(new Event('input')); }
+            });
+            toggleManualCalls();
+            updateTestUI();
+        }
+    } catch(e) {}
+}
+loadSettings();
+
+// Persist details/collapse state
+document.querySelectorAll('details').forEach((d, i) => {
+    const key = 'details-' + i;
+    if (sessionStorage.getItem(key) === 'open') d.open = true;
+    d.addEventListener('toggle', () => sessionStorage.setItem(key, d.open ? 'open' : 'closed'));
+});
+// Save on any setting change
+SETTING_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', saveSettings);
+    if (el.type === 'range') el.addEventListener('input', () => { clearTimeout(el._saveTO); el._saveTO = setTimeout(saveSettings, 500); });
+    if (el.type === 'number' || el.type === 'text' || el.tagName === 'TEXTAREA') el.addEventListener('input', () => { clearTimeout(el._saveTO); el._saveTO = setTimeout(saveSettings, 1000); });
+});
+
+async function runAllModelsTest(scope) {
+    const btn = document.getElementById('st-btn');
+    btn.classList.add('btn-loading'); btn.innerHTML = '<span class="spinner"></span> Testing...';
+    const sel = document.getElementById('st-calls');
+    const numCalls = sel.value === 'custom' ? parseInt(document.getElementById('st-calls-manual').value) : parseInt(sel.value);
+    const sigma = parseInt(document.getElementById('st-sigma').value);
+    const maxTokens = parseInt(document.getElementById('st-max-tokens').value);
+    const testType = document.getElementById('st-type').value;
+
+    // Get models based on scope
+    const select = document.getElementById('chat-model');
+    let models;
+    if (scope === 'loaded') {
+        models = [...select.options].filter(o => o.text.includes('● loaded')).map(o => o.value);
+    } else {
+        models = [...select.options].map(o => o.value).filter(v => v);
+    }
+    if (models.length === 0) { showToast('No models to test', true); btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test'; return; }
+
+    const scopeLabel = scope === 'loaded' ? 'loaded models' : 'all available models';
+    appendMessage('assistant', `<div class="flex items-center justify-between"><div><span class="text-purple-400">🏆 Testing ${scopeLabel}:</span> ${models.length} models, ${numCalls} calls each, type=${testType}</div><button onclick="cancelAllModelsTest()" id="cancel-test-btn" class="text-xs bg-red-800 hover:bg-red-700 px-3 py-1 rounded transition shrink-0">✕ Cancel</button></div><div id="test-progress" class="text-gray-400 mt-1"><span class="spinner"></span> Preparing... <span id="test-eta"></span></div>`, {});
+
+    // Remember originally loaded models to restore later
+    const originallyLoaded = [...select.options].filter(o => o.text.includes('● loaded')).map(o => o.value);
+    const progressEl = document.getElementById('test-progress');
+    const etaEl = document.getElementById('test-eta');
+    const estPerModel = scope === 'loaded' ? numCalls * 1.5 + 3 : numCalls * 1.5 + 20;
+    window._testCancelled = false;
+
+    // Live countdown
+    let totalRemaining = Math.round(models.length * estPerModel);
+    const etaTimer = setInterval(() => {
+        if (totalRemaining > 0) totalRemaining--;
+        const etaEl = document.getElementById('test-eta');
+        if (etaEl) etaEl.textContent = `ETA ~${totalRemaining}s`;
+    }, 1000);
+
+    const allResults = [];
+    for (let mi = 0; mi < models.length; mi++) {
+        if (window._testCancelled) break;
+        const model = models[mi];
+        if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Unloading all → Loading <span class="text-white font-mono">${model}</span>... <span id="test-eta">ETA ~${Math.round((models.length - mi) * estPerModel)}s</span>`;
+
+        // Unload all models first to free VRAM
+        await fetch('/models/unload', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: '--all'}) });
+        await new Promise(r => setTimeout(r, 3000));
+
+        if (window._testCancelled) break;
+
+        // Load test model and wait for it to be ready
+        await fetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
+        // Poll until model is loaded (max 60s)
+        for (let w = 0; w < 30; w++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const ps = await fetch('/api/models/loaded').then(r => r.json());
+            if (ps.output && ps.output.includes(model.split('/').pop())) break;
+            if (window._testCancelled) break;
+        }
+        if (window._testCancelled) break;
+
+        // Warmup call
+        await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, message: 'warmup', temperature: 0, max_tokens: 16 }) });
+
+        if (window._testCancelled) break;
+        if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Testing <span class="text-white font-mono">${model}</span>... <span id="test-eta">ETA ~${Math.round((models.length - mi) * estPerModel)}s</span>`;
+
+        try {
+            const resp = await fetch('/chat/speedtest', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model, num_calls: numCalls, sigma, max_tokens: maxTokens }) });
+            const data = await resp.json();
+            allResults.push({ model, stats: data.stats, results: data.results });
+        } catch(e) {
+            allResults.push({ model, stats: { mean_ms: 99999, filtered_mean_ms: 99999, min_ms: 0, max_ms: 0, std_dev_ms: 0 }, results: [] });
+        }
+
+        // Unload model after test (free VRAM for next model) - handled at start of next iteration
+        if (mi < models.length - 1) {
+            if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> [${mi+1}/${models.length}] Done with <span class="text-white font-mono">${model}</span>, next...`;
+        }
+    }
+
+    // Restore originally loaded models
+    clearInterval(etaTimer);
+    if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> Restoring original models...`;
+    await fetch('/models/unload', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: '--all'}) });
+    await new Promise(r => setTimeout(r, 2000));
+    // Then reload the originally loaded ones
+    for (const model of originallyLoaded) {
+        await fetch('/models/load', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: model}) });
+    }
+
+    // Remove running message
+    const container = document.getElementById('chat-messages');
+    const last = container.lastElementChild; if (last) last.remove();
+
+    if (window._testCancelled && allResults.length === 0) {
+        appendMessage('assistant', `<span class="text-red-400">Test cancelled. Models restored.</span>`, {});
+        btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
+        return;
+    }
+
+    // Rank by filtered mean (or mean if no filter)
+    allResults.sort((a, b) => (a.stats.filtered_mean_ms || a.stats.mean_ms) - (b.stats.filtered_mean_ms || b.stats.mean_ms));
+    const best = allResults[0];
+
+    let reportHtml = `<div class="text-purple-400 font-semibold mb-2">🏆 All Models Report</div>
+        <div class="text-xs text-gray-300 mb-2">${numCalls} calls per model · max_tokens=${maxTokens} · σ=${sigma}</div>
+        <table class="w-full text-xs"><thead><tr class="text-gray-400 border-b border-gray-700"><th class="text-left py-1">#</th><th class="text-left py-1">Model</th><th class="text-right py-1">Mean</th><th class="text-right py-1">Filtered</th><th class="text-right py-1">Min</th><th class="text-right py-1">Max</th><th class="text-right py-1">StdDev</th></tr></thead><tbody>`;
+
+    allResults.forEach((r, i) => {
+        const highlight = i === 0 ? 'text-green-400 font-semibold' : 'text-gray-300';
+        reportHtml += `<tr class="border-b border-gray-700/30 ${highlight}"><td class="py-1">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i+1}</td><td class="py-1 font-mono">${r.model}</td><td class="text-right py-1">${r.stats.mean_ms.toFixed(0)}ms</td><td class="text-right py-1">${r.stats.filtered_mean_ms.toFixed(0)}ms</td><td class="text-right py-1">${r.stats.min_ms}ms</td><td class="text-right py-1">${r.stats.max_ms}ms</td><td class="text-right py-1">${r.stats.std_dev_ms.toFixed(0)}ms</td></tr>`;
+    });
+    reportHtml += `</tbody></table>`;
+    reportHtml += `<div class="mt-3 p-2 bg-green-900/30 border border-green-700 rounded text-xs text-green-300">🏆 Winner: <strong>${best.model}</strong> — ${best.stats.filtered_mean_ms.toFixed(1)}ms avg (filtered)</div>`;
+
+    appendMessage('assistant', reportHtml, {});
+    btn.classList.remove('btn-loading'); btn.innerHTML = '▶ Run Test';
+}
+
+async function cancelAllModelsTest() {
+    window._testCancelled = true;
+    const cancelBtn = document.getElementById('cancel-test-btn');
+    if (cancelBtn) cancelBtn.textContent = 'Cancelling...';
+}
+
+function toggleManualCalls() {
+    const sel = document.getElementById('st-calls');
+    const manual = document.getElementById('st-calls-manual');
+    manual.style.display = sel.value === 'custom' ? 'block' : 'none';
+}
+toggleManualCalls();
+
+async function runTest() {
+    const scope = document.getElementById('st-scope').value;
+    if (scope === 'loaded' || scope === 'all') return runAllModelsTest(scope);
+    const type = document.getElementById('st-type').value;
+    if (type === 'speed' || type === 'stability') return runSpeedTest();
+    if (type === 'latency') return runLatencyTest();
+    if (type === 'throughput') return runThroughputTest();
+    if (type === 'concurrency') return runConcurrencyTest();
+}
+
+async function runSpeedTest() {
+    const model = document.getElementById('chat-model').value;
+    if (!model) { showToast('No model selected', true); return; }
+
+    const btn = document.getElementById('st-btn');
+    btn.classList.add('btn-loading');
+    btn.innerHTML = '<span class="spinner"></span> Running...';
+
+    const sel = document.getElementById('st-calls');
+    const numCalls = sel.value === 'custom' ? parseInt(document.getElementById('st-calls-manual').value) : parseInt(sel.value);
+    const sigma = parseInt(document.getElementById('st-sigma').value);
+    const maxTokens = parseInt(document.getElementById('st-max-tokens').value);
+
+    const estimatedSec = Math.round(numCalls * 1.5);
+    appendMessage('assistant', `<span class="text-yellow-400">⚡ Speed Test:</span> ${model} — ${numCalls} calls, σ=${sigma}, max_tokens=${maxTokens}<br><span class="spinner"></span> Running warmup + ${numCalls} calls... <span id="st-eta">ETA ~${estimatedSec}s</span>`, { model });
+
+    // Countdown timer
+    let remaining = estimatedSec;
+    const etaInterval = setInterval(() => {
+        remaining--;
+        const el = document.getElementById('st-eta');
+        if (el && remaining > 0) el.textContent = `ETA ~${remaining}s`;
+        else if (el) el.textContent = 'finishing...';
+    }, 1000);
+
+    try {
+        const resp = await fetch('/chat/speedtest', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ model, num_calls: numCalls, sigma, max_tokens: maxTokens })
+        });
+        const data = await resp.json();
+        clearInterval(etaInterval);
+        renderSpeedTestResults(data);
+    } catch(e) {
+        clearInterval(etaInterval);
+        appendMessage('assistant', `<span class="text-red-400">Speed test failed: ${e.message}</span>`);
+    }
+
+    btn.classList.remove('btn-loading');
+    btn.innerHTML = '▶ Run Test';
+}
+
+function renderSpeedTestResults(data) {
+    const { results, stats } = data;
+    const container = document.getElementById('chat-messages');
+    stCounter++;
+    const chartId = 'st-chart-' + stCounter;
+
+    // Save to DB
+    const model = document.getElementById('chat-model').value;
+    fetch('/api/tests/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        test_type: 'speed', model, num_calls: stats.total_calls, max_tokens: parseInt(document.getElementById('st-max-tokens').value) || 64,
+        sigma: stats.sigma, results_json: JSON.stringify(results), stats_json: JSON.stringify(stats)
+    }) });
+
+    // Remove the "Running..." message
+    const last = container.lastElementChild;
+    if (last) last.remove();
+
+    // Stats card
+    const filteredNote = stats.sigma > 0
+        ? `<br>Filtered (${stats.sigma}σ): <span class="text-green-400">${stats.filtered_mean_ms.toFixed(1)}ms</span> (${stats.filtered_calls}/${stats.total_calls} calls kept)`
+        : '';
+
+    const testId = 'test-' + stCounter;
+    // Store test data for starring
+    storeTestData(testId, { test_type: 'speed', model, results, stats, max_tokens: parseInt(document.getElementById('st-max-tokens').value) || 64 });
+
+    const statsHtml = `
+        <div class="flex items-center justify-between mb-2">
+            <div class="text-yellow-400 font-semibold">⚡ Speed Test Results</div>
+            <div class="flex items-center gap-2">
+                <button onclick="starTest('${testId}')" id="star-${testId}" class="text-gray-500 hover:text-yellow-400 transition text-sm" data-tip="Save to database">☆</button>
+                <button onclick="deleteTestCard(this)" class="text-gray-500 hover:text-red-400 transition text-sm" data-tip="Remove from chat">✕</button>
+            </div>
+        </div>
+        <div class="text-xs text-gray-300 space-y-1">
+            <div>Mean: <span class="text-white">${stats.mean_ms.toFixed(1)}ms</span> · Median: <span class="text-white">${stats.median_ms.toFixed(1)}ms</span></div>
+            <div>Min: <span class="text-white">${stats.min_ms}ms</span> · Max: <span class="text-white">${stats.max_ms}ms</span> · StdDev: <span class="text-white">${stats.std_dev_ms.toFixed(1)}ms</span></div>
+            ${filteredNote}
+        </div>
+        <canvas id="${chartId}" class="mt-3" style="width:100%;height:200px;"></canvas>
+        <div class="mt-2 flex gap-4 text-xs text-gray-500">
+            <span>● <span class="text-blue-400">Normal</span></span>
+            <span>● <span class="text-red-400">Outlier (removed from results)</span></span>
+        </div>
+        <details class="mt-2">
+            <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-300">Show individual calls</summary>
+            <div class="mt-2 space-y-2 max-h-60 overflow-y-auto">
+                ${results.map(r => `
+                <div class="rounded border ${r.outlier ? 'border-red-700 bg-red-900/10' : 'border-gray-700 bg-gray-800/50'} p-2 text-xs">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="font-semibold ${r.outlier ? 'text-red-400' : 'text-gray-300'}">#${r.index}</span>
+                        <span class="text-gray-500">${r.duration_ms}ms · ${r.tokens} tok${r.outlier ? ' · ⚠️ outlier' : ''}</span>
+                    </div>
+                    <div class="bg-blue-900/30 border border-blue-800 rounded px-2 py-1 mb-1">
+                        <span class="text-blue-400 text-[10px] uppercase">Sent</span>
+                        <p class="text-gray-200">${escapeHtml(r.prompt)}</p>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-700 rounded px-2 py-1">
+                        <span class="text-green-400 text-[10px] uppercase">Received</span>
+                        <p class="text-gray-200">${r.response ? escapeHtml(r.response) : '<span class="text-gray-500 italic">empty response</span>'}</p>
+                    </div>
+                </div>`).join('')}
+            </div>
+        </details>`;
+
+    appendMessage('assistant', statsHtml, { model: document.getElementById('chat-model').value });
+
+    // Draw chart with unique ID
+    window._chartData[chartId] = results;
+    setTimeout(() => { drawChart(results, chartId); saveChatState(); }, 50);
+}
+
+function drawChart(results, chartId) {
+    const canvas = document.getElementById(chartId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width - 24;
+    canvas.height = 200;
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+    const plotW = w - pad.left - pad.right;
+    const plotH = h - pad.top - pad.bottom;
+
+    const maxMs = Math.max(...results.map(r => r.duration_ms)) * 1.1;
+    const minMs = 0;
+
+    // Background
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (plotH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(w - pad.right, y);
+        ctx.stroke();
+        // Label
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        const val = maxMs - (maxMs / 4) * i;
+        ctx.fillText(Math.round(val) + 'ms', pad.left - 5, y + 4);
+    }
+
+    // X-axis labels
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < results.length; i++) {
+        const x = pad.left + (plotW / (results.length - 1 || 1)) * i;
+        if (i % Math.ceil(results.length / 10) === 0 || i === results.length - 1) {
+            ctx.fillText('#' + results[i].index, x, h - 5);
+        }
+    }
+
+    // Line
+    ctx.beginPath();
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < results.length; i++) {
+        const x = pad.left + (plotW / (results.length - 1 || 1)) * i;
+        const y = pad.top + plotH - (results[i].duration_ms / maxMs) * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Dots
+    for (let i = 0; i < results.length; i++) {
+        const x = pad.left + (plotW / (results.length - 1 || 1)) * i;
+        const y = pad.top + plotH - (results[i].duration_ms / maxMs) * plotH;
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = results[i].outlier ? '#ef4444' : '#3b82f6';
+        ctx.fill();
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Changelog — LMS{% endblock %}
+{% block content %}
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6">
+    <h2 class="text-lg font-bold text-gray-100 mb-4">Build Info</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+            <p class="text-xs text-gray-400 uppercase mb-1">Commit</p>
+            <p class="font-mono text-cyan-400">{{ git_hash }}</p>
+        </div>
+        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+            <p class="text-xs text-gray-400 uppercase mb-1">Built At</p>
+            <p class="font-mono text-gray-200">{{ build_time }}</p>
+        </div>
+        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+            <p class="text-xs text-gray-400 uppercase mb-1">Version</p>
+            <p class="font-mono text-gray-200">{{ version }}</p>
+        </div>
+    </div>
+</div>
+
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <h2 class="text-lg font-bold text-gray-100 mb-4">Recent Commits</h2>
+    <pre class="text-sm text-gray-300 font-mono leading-relaxed">{{ git_log }}</pre>
+</div>
+{% endblock %}

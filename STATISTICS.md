@@ -6,13 +6,15 @@ Auto-generated usage tracking. Shows which agents, hooks, and skills are actuall
 
 | Agent | Count | Last Used |
 |-------|-------|-----------|
-| orchestrator | 2 | 2026-06-16 |
+| orchestrator | 10 | 2026-06-19 |
 | researcher | 1 | 2026-06-16 |
 | researcher | 1 | 2026-06-16 |
-| shell-specialist | 188 | 2026-06-18 |
+| shell-specialist | 252 | 2026-06-20 |
+| dev-specialist | 3 | 2026-06-20 |
+| git-specialist | 3 | 2026-06-20 |
 
 ## Hook Executions
 
 | Hook | Count | Last Fired |
 |------|-------|-----------|
-| stop | 169 | 2026-06-18 |
+| stop | 217 | 2026-06-20 |
