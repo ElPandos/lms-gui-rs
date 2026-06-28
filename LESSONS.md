@@ -239,3 +239,91 @@
 - **Root cause**: Fixing a bug during a behavior-preserving refactor invalidates the safety net (characterization test now asserts old behavior the refactor changed), expands scope, and makes the diff unreviewable for behavior preservation — reviewers can't tell which changes are refactor vs. fix
 - **Fix**: Note the bug in "Follow-up Tech Debt" section of the plan, leave it unfixed, ensure the characterization test pins the buggy behavior
 - **Prevention**: Define "behavior-preserving" upfront as "characterization tests pass unchanged." Any discovered bug goes to a separate follow-up ticket with its own test+fix PR, never bundled into the refactor
+
+---
+
+## [shell] `&&` chaining short-circuits cleanup when first command fails
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Deleted model reappears in `lms ls` immediately after deletion — the `rm -rf` never ran
+- **Root cause**: `lms unload <model> && rm -rf <dir>` — `lms unload` returns non-zero when the model isn't currently loaded, so `&&` short-circuits and skips the `rm -rf`. The model files stay on disk and `lms ls` rescans them on next call
+- **Fix**: Use `;` (sequential) instead of `&&` so cleanup runs regardless of unload's exit status. No LMS server restart needed — `lms ls` rescans the filesystem on each invocation
+- **Prevention**: For multi-step cleanup commands, prefer `;` over `&&` when steps are independent. `&&` means "only proceed if this succeeded"; cleanup must always run. Test the "model not loaded" edge case for any delete path
+
+---
+
+## [cli] LMS model ID does not match on-disk directory name
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: `find -name 'qwen3-4b'` returns nothing; model files not found for deletion
+- **Root cause**: LMS exposes a normalized model ID (`qwen3-4b`) but the HuggingFace download directory uses the original repo casing (`Qwen3-4B-GGUF`). Exact case-sensitive `find -name` misses it
+- **Fix**: Use `find -iname '*qwen3-4b*'` (case-insensitive wildcard) to locate the directory
+- **Prevention**: Never assume LMS model IDs match filesystem paths — LMS normalizes names. Always use case-insensitive wildcard search when locating model directories by ID
+
+---
+
+## [lms] `lms load -y` forces duplicate instances (`:2` suffix)
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Loading an already-loaded model creates a second instance with `:2` suffix in `lms ps`
+- **Root cause**: The `-y` flag forces a new load even when the model is already loaded, bypassing LMS's dedup. Calling load without checking loaded state first creates duplicates
+- **Fix**: Remove `-y`; before calling `lms load`, check `/api/models/loaded` (or `lms ps`) and skip if the model is already loaded
+- **Prevention**: Never use force/`-y` flags by default. Always check current state before issuing idempotent-intended commands. Treat "load" as a no-op-if-loaded operation, not a force-reload
+
+---
+
+## [process] Canceled downloads leave orphaned `.part` files on disk
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: 14GB of orphaned partial download files accumulated in the models directory after repeated canceled downloads
+- **Root cause**: `cancel_download` killed the `lms get` process and cleaned PID files, but `lms get` writes `.part` files directly to the models directory. The cancel handler never deleted the download's target directory
+- **Fix**: On cancel, also locate and delete the download's `.part` files / download directory, not just the PID files
+- **Prevention**: Any cancel/abort handler must clean up ALL side effects of the canceled process, not just the process itself. For downloads, that means partial files, temp dirs, and lock files. Audit cancel paths for orphaned artifacts periodically
+
+---
+
+## [lms] Restarting the LMS server inside a request handler causes API downtime
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Delete operation times out (20s) and the API becomes unresponsive
+- **Root cause**: `lms server stop && lms server start` inside a `run_cmd` (20s tokio timeout) takes the API down during the restart. The subsequent health-check loop exceeds the 20s timeout, aborting the request
+- **Fix**: Don't restart the server after delete — `lms ls` rescans the filesystem on each call, so a running server picks up deletions immediately. Remove server restart from the delete flow entirely
+- **Prevention**: Never restart a service from within a request handler that has a timeout. If a refresh is needed, prefer the API's own rescan mechanism. Treat server restarts as out-of-band operator actions, not request-handler steps
+
+---
+
+## [tooling] Playwright MCP `browser_snapshot` with no args fails in OpenCode
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: `browser_snapshot` call rejected with `input: Field required` even though all params are optional
+- **Root cause**: OpenCode bug #20637 — when an MCP tool has all-optional parameters and the LLM calls it with no args, the harness rejects the empty object as "Field required" instead of passing it through
+- **Fix**: Always pass at least one parameter (e.g., `depth`) when calling `browser_snapshot`
+- **Prevention**: For MCP tools with all-optional params in OpenCode, never call with an empty args object — always include at least one param. Track OpenCode bug #20637 for the underlying fix
+
+---
+
+## [lms] Quantization selection must use `@quant` syntax, not rely on auto-select
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Downloads complete with the wrong quantization (default Q8) regardless of user's badge selection
+- **Root cause**: `startDownload()` sent only the model name to `lms get -y`, which auto-selects a default quant. The `@quant` syntax (`lms get model@q8_0`) that pins a specific quant was never used; the UI's quant badges were display-only
+- **Fix**: Make quant badges clickable; append `@<quant>` to the download command (e.g., `lms get qwen3-4b@q8_0`)
+- **Prevention**: When a UI element represents a CLI flag/value, trace the selection from click to API to CLI command end-to-end. Display-only controls that don't reach the command are a common UX bug. Verify user selections appear in the final shell command
+
+---
+
+## [lms] Small-context models cannot fit large IDE/agent system prompts
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Zed's Write profile fails with context overflow on small models like qwen3-4b (40K context)
+- **Root cause**: Zed's Write profile system prompt is ~80K tokens. Models with 40K context windows cannot fit the prompt plus user input. This is distinct from the parallel-slots context division (see lesson "[lms] Parallel slots divide context window") — here the model's *total* context is too small, not divided
+- **Fix**: Use a model with a context window of 200K+ tokens for IDE/agent workloads with large system prompts
+- **Prevention**: Before assigning a model to an IDE/agent integration, check the integration's system prompt size against the model's context window. Keep a tiered model list: small models for chat, large-context models for agents. Never assume "it loaded" means "it fits"

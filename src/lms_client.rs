@@ -340,10 +340,27 @@ impl LmsClient {
         let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
         let log_file = format!("/tmp/lms-dl-{}.log", dl_id);
         tracing::info!(model = %safe_name, "Cancelling download");
-        // Kill by PID if file exists, fallback to pkill, then clean up
+        // 1. Kill the download process (by PID file, then pkill fallback)
+        // 2. Remove PID and log files
+        // 3. Delete partial download files (.part) left behind by lms get.
+        //    `lms get` writes directly to the models directory with a .part suffix.
+        //    If killed mid-download, these partial files remain on disk indefinitely.
+        //    Use the basename from the model key as a case-insensitive wildcard to
+        //    find the download directory (e.g. "gpt-oss-120b" matches "gpt-oss-120b-GGUF").
+        let search_part = safe_name.split('/').next_back().unwrap_or(&safe_name);
         let cmd = format!(
-            "pid=$(cat {} 2>/dev/null); if [ -n \"$pid\" ]; then kill $pid 2>/dev/null; fi; pkill -f '[l]ms get {}' 2>/dev/null; rm -f {} {} && echo 'cancelled'",
-            pid_file, safe_name, pid_file, log_file
+            "pid=$(cat {} 2>/dev/null); if [ -n \"$pid\" ]; then kill $pid 2>/dev/null; fi; \
+             pkill -f '[l]ms get {}' 2>/dev/null; \
+             sleep 1; \
+             rm -f {} {}; \
+             dir=$(find $HOME/.lmstudio/models -maxdepth 3 -type d -iname '*{}*' | head -1); \
+             if [ -n \"$dir\" ]; then \
+                 rm -rf \"$dir\"; \
+                 echo 'cancelled and partial files deleted'; \
+             else \
+                 echo 'cancelled'; \
+             fi",
+            pid_file, safe_name, pid_file, log_file, search_part
         );
         self.run_cmd(&cmd).await
     }
@@ -384,12 +401,31 @@ impl LmsClient {
                     .to_string(),
             );
         }
-        // Require unload success (&& not ;) — refuse to delete if unload fails
-        // Use exact directory name match (basename equals search_part), not substring -iname
+        // Step 1: Unload from memory if loaded (use ; not && — model may not be in memory,
+        // and that's fine; we still need to delete the files).
+        // Step 2: Find and delete the model directory from disk.
+        //   The LMS model identifier (e.g. "qwen3-4b") does NOT match the directory name
+        //   on disk (e.g. "Qwen3-4B-GGUF"). Use case-insensitive wildcard match (-iname)
+        //   to find the directory. The basename without the publisher prefix is used as
+        //   the search term (e.g. "qwen3-4b" from "Qwen/qwen3-4b").
+        // Step 3: Restart the LMS daemon so its internal index rescans and drops
+        //         the deleted model. Without this, `lms ls` still shows it (there is
+        //         no `lms remove` command — see lmstudio-ai/lms#579).
         let search_part = safe_name.split('/').next_back().unwrap_or(&safe_name);
         self.run_cmd(&format!(
-            "lms unload {} 2>/dev/null && dir=$(find $HOME/.lmstudio/models -maxdepth 3 -type d -name '{}' | head -1) && if [ -n \"$dir\" ]; then rm -rf \"$dir\" && echo 'Deleted'; else echo 'Not found'; fi",
-            safe_name, search_part
+            "lms unload {} 2>/dev/null; \
+             dir=$(find $HOME/.lmstudio/models -maxdepth 3 -type d -iname '*{}*' | while read d; do \
+                 if find \"$d\" -maxdepth 1 -name '*.gguf' | head -1 | grep -qi '{}'; then \
+                     echo \"$d\"; break; \
+                 fi; \
+             done); \
+             if [ -n \"$dir\" ]; then \
+                 rm -rf \"$dir\"; \
+                 echo 'Deleted'; \
+             else \
+                 echo 'Not found'; \
+             fi",
+            safe_name, search_part, search_part
         )).await
     }
 
@@ -439,7 +475,7 @@ impl LmsClient {
             _ => String::new(),
         };
         self.run_cmd(&format!(
-            "(lms load {} --gpu max{}{} -y > /tmp/lms-load.log 2>&1 &) && echo 'Loading started'",
+            "(lms load {} --gpu max{}{} > /tmp/lms-load.log 2>&1 &) && echo 'Loading started'",
             safe_name, ctx_flag, parallel_flag
         ))
         .await

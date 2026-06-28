@@ -159,7 +159,10 @@
                     {% let quants = model.quantizations() %}                    {% let recommended = model.recommended_quant(gpu_vram_gb) %}
                     {% for q in quants %}
                     {% let is_recommended = recommended.as_deref() == Some(q.as_str()) %}
-                    <span class="text-[10px] px-1.5 py-0.5 rounded cursor-default {% if is_recommended %}bg-yellow-700/40 text-yellow-300 border border-yellow-600/50{% else %}bg-purple-700/30 text-purple-400{% endif %}" data-tip="{{ model.quant_desc(q) }}{% if is_recommended %} ★ Recommended for {{ gpu_vram_gb }}GB VRAM{% endif %}">{{ q }}{% if is_recommended %} ★{% endif %}</span>
+                    <span onclick="selectQuant(this, '{{ q }}', '{{ model.model_id }}')"
+                        class="quant-badge text-[10px] px-1.5 py-0.5 rounded cursor-pointer transition {% if is_recommended %}bg-yellow-700/40 text-yellow-300 border border-yellow-600/50{% else %}bg-purple-700/30 text-purple-400{% endif %}"
+                        data-quant="{{ q }}"
+                        data-tip="{{ model.quant_desc(q) }}{% if is_recommended %} ★ Recommended for {{ gpu_vram_gb }}GB VRAM{% endif %} — Click to select">{{ q }}{% if is_recommended %} ★{% endif %}</span>
                     {% endfor %}
                 </div>
                 <!-- Row 3: stats + date -->
@@ -334,11 +337,9 @@ function filterByLicense() {
 
 // Quantization filter (HF only, client-side, populated from visible results)
 function getCardQuants(card) {
-    // Collect all quant badges (purple or yellow/recommended) in row 2
-    const badges = card.querySelectorAll('[id^=hf-card] span.bg-purple-700\\/30, [id^=hf-card] span.bg-yellow-700\\/40');
-    // Simpler: get all badges that contain quant patterns (Q4_K_M, F16, etc.)
+    // Collect all quant badges with the quant-badge class
     const quants = [];
-    card.querySelectorAll('.bg-purple-700\\/30, .bg-yellow-700\\/40').forEach(b => {
+    card.querySelectorAll('.quant-badge').forEach(b => {
         const text = b.textContent.trim().replace(' ★', '');
         if (text.match(/^[QIFB]\d/i)) quants.push(text);
     });
@@ -379,6 +380,30 @@ function filterByQuant() {
             card.style.display = 'none';
         }
     });
+}
+
+// Quantization selection — click a badge to select it for download.
+// `lms get` supports `model@quant` syntax (e.g. qwen/qwen3.5-9b@q8_0).
+// This tracks the selected quant per model card and highlights it.
+function selectQuant(badge, quant, modelId) {
+    const card = badge.closest('[id^=hf-card]');
+    if (!card) return;
+    // Toggle: if already selected, deselect
+    const wasSelected = badge.classList.contains('quant-selected');
+    // Clear all selections in this card
+    card.querySelectorAll('.quant-badge').forEach(b => {
+        b.classList.remove('quant-selected', 'ring-2', 'ring-cyan-400', 'bg-cyan-700');
+        b.classList.add(b.dataset.quant === card.dataset.recommendedQuant ? 'bg-yellow-700/40' : 'bg-purple-700/30');
+        b.classList.remove(b.dataset.quant === card.dataset.recommendedQuant ? 'bg-purple-700/30' : 'bg-yellow-700/40');
+    });
+    if (!wasSelected) {
+        // Select this badge
+        badge.classList.add('quant-selected', 'ring-2', 'ring-cyan-400', 'bg-cyan-700');
+        badge.classList.remove('bg-purple-700/30', 'bg-yellow-700/40');
+        card.dataset.selectedQuant = quant;
+    } else {
+        delete card.dataset.selectedQuant;
+    }
 }
 
 // On load: add size estimates to cards + populate license filter
@@ -580,13 +605,18 @@ async function startDownload(name, btn) {
     if (btn.classList.contains('btn-loading')) return;
     btn.classList.add('btn-loading');
     btn.innerHTML = '<span class="spinner"></span>';
+    // Check if a specific quantization was selected for this model.
+    // lms get supports `model@quant` syntax (e.g. qwen/qwen3.5-9b@q8_0).
+    const card = btn.closest('[id^=hf-card]');
+    const selectedQuant = card?.dataset?.selectedQuant;
+    const downloadName = selectedQuant ? `${name}@${selectedQuant}` : name;
     await fetch(`/models/download/status?q=${encodeURIComponent(name)}&clear=1`);
-    const resp = await apiPost('/models/download', {model_name: name});
+    const resp = await apiPost('/models/download', {model_name: downloadName});
     btn.classList.remove('btn-loading');
     if (resp && resp.success) {
-        setDownloadActive(name);
+        setDownloadActive(downloadName);
         // Remove from search results and add to active downloads section
-        const card = btn.closest('[id^=dl-card]');
+        const card = btn.closest('[id^=dl-card]') || btn.closest('[id^=hf-card]');
         if (card) card.remove();
         const section = document.getElementById('active-downloads-section');
         const list = document.getElementById('active-downloads-list');
@@ -594,13 +624,14 @@ async function startDownload(name, btn) {
         const dlCard = document.createElement('div');
         dlCard.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
         dlCard.id = 'active-dl-' + name.replace(/\//g, '_');
+        const quantBadge = selectedQuant ? `<span class="text-xs px-1.5 py-0.5 rounded bg-cyan-700/40 text-cyan-300 font-sans">${selectedQuant}</span>` : '';
         dlCard.innerHTML = `
             <div class="flex items-center justify-between">
                 <div class="min-w-0 flex-1">
-                    <p class="text-sm font-mono text-gray-100">${name} ${extractParams(name) > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${extractParams(name)}B ${estimateSize(extractParams(name))}</span>` : ''}</p>
+                    <p class="text-sm font-mono text-gray-100">${name} ${quantBadge} ${extractParams(name) > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${extractParams(name)}B ${estimateSize(extractParams(name))}</span>` : ''}</p>
                     <span class="dl-info text-xs text-gray-400">Starting...</span>
                 </div>
-                <button onclick="cancelActiveDownload('${name}', this)"
+                <button onclick="cancelActiveDownload('${downloadName}', this)"
                     data-tip="Cancel download"
                     class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
             </div>
@@ -610,7 +641,7 @@ async function startDownload(name, btn) {
                 </div>
             </div>`;
         list.appendChild(dlCard);
-        pollActiveDownload(name, dlCard);
+        pollActiveDownload(downloadName, dlCard);
     } else {
         btn.innerHTML = '⬇ Get';
     }

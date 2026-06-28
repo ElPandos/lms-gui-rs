@@ -151,6 +151,24 @@
 <script>
 async function loadModel(name, btn) {
     document.getElementById('error-card').classList.add('hidden');
+
+    // Check if model is already loaded before issuing a load command.
+    // Without this, `lms load` creates a duplicate instance (e.g. qwen3-4b:2).
+    // Use regex word-boundary match to avoid false positives (e.g. "qwen3-4b"
+    // matching "qwen3-4b-instruct" in the lms ps output).
+    try {
+        const resp = await fetch('/api/models/loaded');
+        const data = await resp.json();
+        if (data.output) {
+            const baseName = name.split(':')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(`^${baseName}(:\\d+)?\\s`, 'm');
+            if (re.test(data.output)) {
+                showToast(`${name} is already loaded`, false);
+                return;
+            }
+        }
+    } catch(e) {}
+
     // Read the persisted parallel setting (saved on the models page) so dashboard
     // loads respect the user's slot choice. Falls back to server default if unset.
     let parallel = null;

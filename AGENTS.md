@@ -32,6 +32,12 @@ Web dashboard for managing LM Studio models via CLI and REST API.
 | `static/` | Static asset mount point (JS/CSS via CDN; htmx, Tailwind) |
 | `scripts/archive-bench-to-vault.sh` | Archive benchmark results to Obsidian vault |
 | `docs/` | Reports and scratchpad archives (profiling, notes) |
+| `playwright.config.ts` | Playwright E2E test config (auto-starts `cargo run` on port 3001) |
+| `package.json` | Node dev dependency for `@playwright/test` |
+| `tests/seed.spec.ts` | Seed test for Playwright Test Agents |
+| `specs/README.md` | Directory for Playwright test plans |
+| `.opencode/prompts/` | Playwright Test Agent definitions (planner, generator, healer) |
+| `opencode.json` | OpenCode project config registering test agents |
 
 ## Key Patterns
 
@@ -42,6 +48,7 @@ Web dashboard for managing LM Studio models via CLI and REST API.
 - **Structured logging**: tracing at all levels (error/warn/info/debug) to stdout + daily rolling file
 - **Settings persistence**: All UI settings saved to SQLite via `/api/settings`
 - **No hardcoded hosts**: All IPs/credentials via environment variables
+- **Playwright E2E testing**: Config auto-starts the app on port 3001; OpenCode Test Agents (planner, generator, healer) drive test authoring and maintenance
 
 ## Running
 
