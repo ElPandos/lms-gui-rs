@@ -3,7 +3,7 @@
 //! When `LMS_LOCAL=1` env var is set, commands run locally (no SSH).
 //! Otherwise, commands are sent over SSH with multiplexing.
 
-use crate::models::{Model, ModelsResponse, RuntimeInfo};
+use crate::models::{ActiveDownload, Model, ModelsResponse, RuntimeInfo};
 use reqwest::Client;
 use std::process::Command;
 
@@ -314,21 +314,46 @@ impl LmsClient {
     /// Start a background model download via `lms get`, with PID tracking.
     pub async fn download_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
-        let dl_id = Self::dl_id(name);
+        let dl_id = LmsClient::dl_id(name);
         let log_file = format!("/tmp/lms-dl-{}.log", dl_id);
         let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
+        let name_file = format!("/tmp/lms-dl-{}.name", dl_id);
         tracing::info!(model = %safe_name, dl_id = %dl_id, "Starting model download");
-        // Kill any existing download for this model before starting fresh (wait for it to die)
+        // Kill any existing download for this model before starting fresh.
+        // The PID file now collides across publisher variants (dl_id normalizes
+        // to the model basename), so a cross-publisher download of the same
+        // model is stopped via its PID. The pkill fallback matches on the
+        // repo basename so unrelated model downloads are left alone.
+        // Also delete old .part files — lms get does NOT clean these up
+        // automatically, so without this, every download attempt leaves
+        // a stale .part file behind (especially when switching quants).
+        let pkill_name = safe_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&safe_name)
+            .split('@')
+            .next()
+            .unwrap_or(&safe_name);
+        let pkill_no_gguf = pkill_name
+            .strip_suffix("-GGUF")
+            .or_else(|| pkill_name.strip_suffix("-gguf"))
+            .unwrap_or(pkill_name);
         let _ = self
             .run_cmd(&format!(
-                "pkill -f '[l]ms get {}' 2>/dev/null; sleep 0.5; rm -f {} {}",
-                safe_name, log_file, pid_file
+                "pid=$(cat {} 2>/dev/null); if [ -n \"$pid\" ]; then kill $pid 2>/dev/null; fi; \
+                 pkill -f '[l]ms get.*{}' 2>/dev/null; \
+                 sleep 0.5; rm -f {} {} {}; \
+                 find $HOME/.lmstudio/models -maxdepth 3 -name 'downloading_*{}*.part' -delete 2>/dev/null; \
+                 find $HOME/.lmstudio/models -maxdepth 3 -name 'downloading_*{}*.part' -delete 2>/dev/null",
+                pid_file, pkill_name, log_file, pid_file, name_file,
+                pkill_name, pkill_no_gguf
             ))
             .await;
-        // Start download in background, write PID to file
+        tracing::debug!(model = %safe_name, pkill = %pkill_name, "Pre-start cleanup done");
+        // Start download in background, write PID and model name to files
         self.run_cmd(&format!(
-            "(lms get {} -y > {} 2>&1 & echo $! > {} ) && echo 'started'",
-            safe_name, log_file, pid_file
+            "(lms get {} -y > {} 2>&1 & echo $! > {}; echo '{}' > {}) && echo 'started'",
+            safe_name, log_file, pid_file, safe_name, name_file
         ))
         .await
     }
@@ -336,10 +361,11 @@ impl LmsClient {
     /// Cancel an in-progress download by killing the tracked PID.
     pub async fn cancel_download(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
-        let dl_id = Self::dl_id(name);
+        let dl_id = LmsClient::dl_id(name);
         let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
         let log_file = format!("/tmp/lms-dl-{}.log", dl_id);
-        tracing::info!(model = %safe_name, "Cancelling download");
+        let name_file = format!("/tmp/lms-dl-{}.name", dl_id);
+        tracing::info!(model = %safe_name, dl_id = %dl_id, "Cancelling download");
         // 1. Kill the download process (by PID file, then pkill fallback)
         // 2. Remove PID and log files
         // 3. Delete partial download files (.part) left behind by lms get.
@@ -347,29 +373,62 @@ impl LmsClient {
         //    If killed mid-download, these partial files remain on disk indefinitely.
         //    Use the basename from the model key as a case-insensitive wildcard to
         //    find the download directory (e.g. "gpt-oss-120b" matches "gpt-oss-120b-GGUF").
-        let search_part = safe_name.split('/').next_back().unwrap_or(&safe_name);
+        //    Strip the @quant suffix — it's a download selector, not part of the
+        //    on-disk directory name, otherwise the find won't match.
+        let search_part = safe_name
+            .split('/')
+            .next_back()
+            .unwrap_or(&safe_name)
+            .split('@')
+            .next()
+            .unwrap_or(&safe_name);
+        let search_no_gguf = search_part
+            .strip_suffix("-GGUF")
+            .or_else(|| search_part.strip_suffix("-gguf"))
+            .unwrap_or(search_part);
         let cmd = format!(
             "pid=$(cat {} 2>/dev/null); if [ -n \"$pid\" ]; then kill $pid 2>/dev/null; fi; \
-             pkill -f '[l]ms get {}' 2>/dev/null; \
+             pkill -f '[l]ms get.*{}' 2>/dev/null; \
              sleep 1; \
-             rm -f {} {}; \
-             dir=$(find $HOME/.lmstudio/models -maxdepth 3 -type d -iname '*{}*' | head -1); \
+             rm -f {} {} {}; \
+             find $HOME/.lmstudio/models -maxdepth 3 -name 'downloading_*{}*.part' -delete 2>/dev/null; \
+             dir=$(find $HOME/.lmstudio/models -maxdepth 3 -type d -iname '*{}*' -o -type d -iname '*{}*' | head -1); \
              if [ -n \"$dir\" ]; then \
                  rm -rf \"$dir\"; \
                  echo 'cancelled and partial files deleted'; \
              else \
                  echo 'cancelled'; \
              fi",
-            pid_file, safe_name, pid_file, log_file, search_part
+            pid_file, search_part, pid_file, log_file, name_file,
+            search_part, search_part, search_no_gguf
         );
         self.run_cmd(&cmd).await
     }
 
     /// Kill any orphaned download processes (call on server startup).
+    /// Also cleans up stale .part files for downloads our app was tracking
+    /// (identified by .name files). Downloads started from LM Studio's own
+    /// UI (no .name file) are left alone.
     pub async fn reap_orphaned_downloads(&self) -> Result<String, String> {
         tracing::info!("Reaping orphaned download processes");
-        let cmd =
-            "pkill -f '[l]ms get' 2>/dev/null; rm -f /tmp/lms-dl-*.pid 2>/dev/null; echo 'reaped'";
+        // 1. Kill all lms get processes (our app's + any stale ones)
+        // 2. Remove PID files
+        // 3. For each .name file, delete stale .part files matching that model
+        //    (these are leftovers from downloads that were interrupted by the
+        //    app restarting — lms get doesn't clean up .part files on kill)
+        let cmd = "pkill -f '[l]ms get' 2>/dev/null; \
+                   for nf in /tmp/lms-dl-*.name; do \
+                       [ -f \"$nf\" ] || continue; \
+                       mname=$(cat \"$nf\" 2>/dev/null | tr -d '[:space:]'); \
+                       [ -z \"$mname\" ] && continue; \
+                       base=$(echo \"$mname\" | rev | cut -d/ -f1 | rev | cut -d@ -f1); \
+                       noguf=$(echo \"$base\" | sed 's/-GGUF$//;s/-gguf$//'); \
+                       find $HOME/.lmstudio/models -maxdepth 3 -name \"downloading_*${base}*.part\" -delete 2>/dev/null; \
+                       find $HOME/.lmstudio/models -maxdepth 3 -name \"downloading_*${noguf}*.part\" -delete 2>/dev/null; \
+                       rm -f \"$nf\"; \
+                   done; \
+                   rm -f /tmp/lms-dl-*.pid /tmp/lms-dl-*.log 2>/dev/null; \
+                   echo 'reaped'";
         match self.run_cmd(cmd).await {
             Ok(msg) => Ok(msg),
             Err(e) => {
@@ -384,7 +443,7 @@ impl LmsClient {
     /// Unload and delete a model from disk (hardened: exact match, requires unload success).
     pub async fn delete_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
-        let dl_id = Self::dl_id(name);
+        let dl_id = LmsClient::dl_id(name);
         let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
         tracing::warn!(model = %safe_name, "Deleting model from disk");
         // Refuse to delete if a download for this model is still running
@@ -429,12 +488,44 @@ impl LmsClient {
         )).await
     }
 
-    /// Get the tail of a model's download log file.
+    /// Get the tail of a model's download log file, plus the on-disk download
+    /// directory if a `.part` file exists. The directory is determined by
+    /// scanning `~/.lmstudio/models/` for a `.part` file matching the model
+    /// basename — LM Studio may store under a different publisher than the
+    /// URL passed to `lms get`, so this shows the *actual* on-disk path.
     pub async fn download_status(&self, name: &str) -> Result<String, String> {
-        let log_file = format!("/tmp/lms-dl-{}.log", Self::dl_id(name));
+        let log_file = format!("/tmp/lms-dl-{}.log", LmsClient::dl_id(name));
+        // Find the on-disk download directory by looking for .part files
+        // matching the model basename. Strip @quant and take the last path
+        // segment. Also try without a trailing "-GGUF" suffix since `lms get`
+        // drops it from the .part filename (e.g. "Qwen3-Coder-Next-GGUF" →
+        // "downloading_Qwen3-Coder-Next-Q4_K_M.gguf.part").
+        let safe_name = Self::sanitize(name);
+        let search_part = safe_name
+            .split('/')
+            .next_back()
+            .unwrap_or(&safe_name)
+            .split('@')
+            .next()
+            .unwrap_or(&safe_name);
+        let search_no_gguf = search_part
+            .strip_suffix("-GGUF")
+            .or_else(|| search_part.strip_suffix("-gguf"))
+            .unwrap_or(search_part);
         self.run_cmd(&format!(
-            "tail -c 500 {} 2>/dev/null || echo 'no log'",
-            log_file
+            "log=$(tail -c 500 {log} 2>/dev/null || echo 'no log'); \
+             dir=$(find $HOME/.lmstudio/models -maxdepth 3 -name 'downloading_*{part}*.part' -print -quit 2>/dev/null); \
+             if [ -z \"$dir\" ]; then \
+                 dir=$(find $HOME/.lmstudio/models -maxdepth 3 -name 'downloading_*{part_noguf}*.part' -print -quit 2>/dev/null); \
+             fi; \
+             if [ -n \"$dir\" ]; then \
+                 dpath=$(dirname \"$dir\"); \
+                 echo \"PATH:$dpath\"; \
+             fi; \
+             echo \"$log\"",
+            log = log_file,
+            part = search_part,
+            part_noguf = search_no_gguf
         ))
         .await
     }
@@ -599,7 +690,7 @@ impl LmsClient {
 
     /// Read the tail of a specific download log.
     pub async fn download_log_content(&self, name: &str) -> Result<String, String> {
-        let log_file = format!("/tmp/lms-dl-{}.log", Self::dl_id(name));
+        let log_file = format!("/tmp/lms-dl-{}.log", LmsClient::dl_id(name));
         self.run_cmd(&format!(
             "tail -c 500 {} 2>/dev/null || echo 'No log found'",
             log_file
@@ -607,13 +698,91 @@ impl LmsClient {
         .await
     }
 
+    /// List all active (or recently-dead) downloads by scanning PID + name files.
+    /// Returns tuples of (model_name, pid_string, is_running).
+    pub async fn list_active_downloads(&self) -> Result<Vec<ActiveDownload>, String> {
+        tracing::debug!("Listing active downloads");
+        let raw = self
+            .run_cmd(
+                "for pf in /tmp/lms-dl-*.pid; do \
+                    [ -f \"$pf\" ] || continue; \
+                    did=$(basename \"$pf\" .pid | sed 's/lms-dl-//'); \
+                    pid=$(cat \"$pf\" 2>/dev/null | tr -d '[:space:]'); \
+                    name=$(cat \"/tmp/lms-dl-${did}.name\" 2>/dev/null | tr -d '[:space:]'); \
+                    [ -z \"$name\" ] && name=\"unknown\"; \
+                    if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null 2>&1; then \
+                        echo \"${name}|${pid}|1\"; \
+                    else \
+                        echo \"${name}|${pid}|0\"; \
+                    fi; \
+                done 2>/dev/null",
+            )
+            .await?;
+        let downloads = raw
+            .lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.splitn(3, '|').collect();
+                if parts.len() == 3 {
+                    Some(ActiveDownload {
+                        name: parts[0].to_string(),
+                        pid: parts[1].to_string(),
+                        running: parts[2] == "1",
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Ok(downloads)
+    }
+
     /// Deterministic filename-safe hash for a model name (avoids / vs _ collisions).
+    /// Keys on the *normalized* model basename so that the same model downloaded
+    /// from different publisher repos (e.g. lmstudio-community/Foo-GGUF and
+    /// unsloth/Foo-GGUF) shares one tracking slot — the second download kills
+    /// the first instead of running concurrently into a different folder.
     fn dl_id(name: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
+        let key = LmsClient::normalize_dl_key(name);
         let mut hasher = DefaultHasher::new();
-        name.hash(&mut hasher);
+        key.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
+    }
+
+    /// Normalize a model identifier to a canonical download-tracking key.
+    ///
+    /// Strips a leading `https://huggingface.co/` (or `http...`) scheme,
+    /// drops the publisher/namespace segment, and removes a trailing `@quant`
+    /// suffix. Result examples:
+    ///   "https://huggingface.co/lmstudio-community/Qwen3-Coder-Next-GGUF"
+    ///     -> "qwen3-coder-next-gguf"
+    ///   "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF@Q4_K_M"
+    ///     -> "qwen3-coder-next-gguf"
+    ///   "Qwen/Qwen3-Coder-Next-GGUF" -> "qwen3-coder-next-gguf"
+    ///   "Qwen3-Coder-Next-GGUF"      -> "qwen3-coder-next-gguf"
+    ///
+    /// Two differently-prefixed URLs for the same model collapse to the same
+    /// key, so `dl_id` (and thus PID/log files + pkill patterns) collide and
+    /// the pre-start kill actually stops the prior download.
+    fn normalize_dl_key(name: &str) -> String {
+        let trimmed = name
+            .strip_prefix("https://")
+            .or_else(|| name.strip_prefix("http://"))
+            .unwrap_or(name);
+        // Drop host segment if an HF-style URL was passed (huggingface.co/<org>/<repo>)
+        let path = match trimmed.find('/') {
+            Some(_) if trimmed.contains("huggingface.co") => {
+                trimmed.splitn(3, '/').nth(2).unwrap_or(trimmed)
+            }
+            _ => trimmed,
+        };
+        // Take the last path segment as the basename (drops publisher/org).
+        let base = path.rsplit('/').next().unwrap_or(path);
+        // Drop a trailing @quant selector (e.g. "@Q4_K_M").
+        let no_quant = base.split('@').next().unwrap_or(base);
+        no_quant.to_lowercase()
     }
 
     /// Strip any character that is not alphanumeric or one of `/ - _ . : @` from
@@ -766,5 +935,94 @@ impl LmsClient {
                 Err(classify_cli_error(&stderr))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Characterization tests for `normalize_dl_key` — the function that
+    /// collapses cross-publisher download URLs to a single tracking key so
+    /// the same model from `lmstudio-community/` and `unsloth/` shares one
+    /// PID/log slot and the pre-start kill actually stops the prior download.
+    #[test]
+    fn normalize_hf_url_with_publisher() {
+        assert_eq!(
+            LmsClient::normalize_dl_key(
+                "https://huggingface.co/lmstudio-community/Qwen3-Coder-Next-GGUF"
+            ),
+            "qwen3-coder-next-gguf"
+        );
+    }
+
+    #[test]
+    fn normalize_hf_url_different_publisher_collapses() {
+        // The core fix: two different publishers of the same model must
+        // produce the SAME normalized key.
+        let a = LmsClient::normalize_dl_key(
+            "https://huggingface.co/lmstudio-community/Qwen3-Coder-Next-GGUF",
+        );
+        let b = LmsClient::normalize_dl_key("https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF");
+        assert_eq!(a, b);
+        assert_eq!(a, "qwen3-coder-next-gguf");
+    }
+
+    #[test]
+    fn normalize_hf_url_with_quant_suffix() {
+        assert_eq!(
+            LmsClient::normalize_dl_key(
+                "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF@Q4_K_M"
+            ),
+            "qwen3-coder-next-gguf"
+        );
+    }
+
+    #[test]
+    fn normalize_plain_org_repo_form() {
+        assert_eq!(
+            LmsClient::normalize_dl_key("Qwen/Qwen3-Coder-Next-GGUF"),
+            "qwen3-coder-next-gguf"
+        );
+    }
+
+    #[test]
+    fn normalize_bare_name() {
+        assert_eq!(
+            LmsClient::normalize_dl_key("Qwen3-Coder-Next-GGUF"),
+            "qwen3-coder-next-gguf"
+        );
+    }
+
+    #[test]
+    fn normalize_http_scheme() {
+        assert_eq!(
+            LmsClient::normalize_dl_key("http://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF"),
+            "qwen3-coder-next-gguf"
+        );
+    }
+
+    /// `dl_id` must collide for cross-publisher URLs of the same model.
+    /// This is the property that makes the pre-start PID kill work.
+    #[test]
+    fn dl_id_collides_across_publishers() {
+        let id_a =
+            LmsClient::dl_id("https://huggingface.co/lmstudio-community/Qwen3-Coder-Next-GGUF");
+        let id_b = LmsClient::dl_id("https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF");
+        assert_eq!(id_a, id_b, "cross-publisher dl_id must collide");
+    }
+
+    #[test]
+    fn dl_id_collides_with_and_without_quant() {
+        let id_a = LmsClient::dl_id("https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF");
+        let id_b = LmsClient::dl_id("https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF@Q4_K_M");
+        assert_eq!(id_a, id_b, "quant suffix must not change dl_id");
+    }
+
+    #[test]
+    fn dl_id_differs_for_different_models() {
+        let id_a = LmsClient::dl_id("Qwen/Qwen3-Coder-Next-GGUF");
+        let id_b = LmsClient::dl_id("Qwen/gpt-oss-120b-GGUF");
+        assert_ne!(id_a, id_b, "different models must have different dl_id");
     }
 }

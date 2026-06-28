@@ -170,7 +170,29 @@ pub async fn list_models(
         local_models.iter().map(|m| m.name.as_str()).collect();
 
     let (search_results, hf_results) = match search_raw {
-        SearchOutcome::Hf(hf) => (vec![], hf),
+        SearchOutcome::Hf(hf) => {
+            // Dedup HF results by repo basename: HuggingFace hosts multiple
+            // publisher mirrors of the same model (e.g. lmstudio-community/
+            // Qwen3-Coder-Next-GGUF and unsloth/Qwen3-Coder-Next-GGUF).
+            // Without dedup, each renders as a separate card and clicking
+            // both launches concurrent downloads into different publisher
+            // folders. Keep the first (highest-ranked by the sort order) per
+            // basename and drop the rest.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let deduped: Vec<HfModel> = hf
+                .into_iter()
+                .filter(|m| {
+                    let base = m
+                        .model_id
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&m.model_id)
+                        .to_lowercase();
+                    seen.insert(base)
+                })
+                .collect();
+            (vec![], deduped)
+        }
         SearchOutcome::HfEmpty => (vec![], vec![]),
         SearchOutcome::Lms(raw) => (
             parse_search_results(&raw)

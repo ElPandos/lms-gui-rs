@@ -275,14 +275,14 @@
 
 ---
 
-## [process] Canceled downloads leave orphaned `.part` files on disk
+## [process] Orphaned `.part` files accumulate from multiple cleanup gaps
 
 - **Last seen**: 2026-06-28
-- **Times seen**: 1
-- **Symptom**: 14GB of orphaned partial download files accumulated in the models directory after repeated canceled downloads
-- **Root cause**: `cancel_download` killed the `lms get` process and cleaned PID files, but `lms get` writes `.part` files directly to the models directory. The cancel handler never deleted the download's target directory
-- **Fix**: On cancel, also locate and delete the download's `.part` files / download directory, not just the PID files
-- **Prevention**: Any cancel/abort handler must clean up ALL side effects of the canceled process, not just the process itself. For downloads, that means partial files, temp dirs, and lock files. Audit cancel paths for orphaned artifacts periodically
+- **Times seen**: 2
+- **Symptom**: 14GB of orphaned partial download files accumulated in the models directory after repeated canceled/failed downloads
+- **Root cause**: Multiple independent cleanup paths each missed `.part` files. (1) `cancel_download` killed the `lms get` process and cleaned PID files but never deleted `.part` files. (2) Pre-start cleanup killed stale processes and removed PID/log files but NEVER deleted old `.part` files. Each path assumed another path handled it
+- **Fix**: (1) On cancel, also delete the download's `.part` files / target directory. (2) Pre-start cleanup now deletes `.part` files; reaper cleans tracked downloads' `.part` files on startup
+- **Prevention**: Any cancel/abort/cleanup handler must clean up ALL side effects of the canceled process, not just the process itself. When multiple cleanup paths exist, each must be independently complete — never assume "the other path handles it." Audit ALL cleanup paths (cancel, pre-start, reaper) for orphaned artifacts, not just the obvious one
 
 ---
 
@@ -327,3 +327,47 @@
 - **Root cause**: Zed's Write profile system prompt is ~80K tokens. Models with 40K context windows cannot fit the prompt plus user input. This is distinct from the parallel-slots context division (see lesson "[lms] Parallel slots divide context window") — here the model's *total* context is too small, not divided
 - **Fix**: Use a model with a context window of 200K+ tokens for IDE/agent workloads with large system prompts
 - **Prevention**: Before assigning a model to an IDE/agent integration, check the integration's system prompt size against the model's context window. Keep a tiered model list: small models for chat, large-context models for agents. Never assume "it loaded" means "it fits"
+
+---
+
+## [data] HF mirrors cause duplicate simultaneous downloads across publishers
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Same model (Qwen3-Coder-Next-GGUF) downloaded into two publisher folders (lmstudio-community/ and unsloth/) simultaneously
+- **Root cause**: HuggingFace search returns multiple publisher mirrors of the same model as separate cards. `dl_id` hashed on the full name including publisher, so mirrors got distinct IDs. `pkill -f` matched the exact full name, so killing one didn't stop the other. No cross-publisher dedup existed
+- **Fix**: Dedup HF results by basename (strip publisher). `normalize_dl_key` strips publisher from the key, so `dl_id` collides across publishers — the second download attempt finds the existing one instead of starting a duplicate
+- **Prevention**: For any search source with mirror/copy semantics (HF publishers, GH forks), dedup by normalized basename, not full identifier. Identity keys for dedup must be invariant across cosmetic differences (publisher, casing). When `pkill` is used for process management, ensure the match pattern covers all variants, or kill by tracked PID instead
+
+---
+
+## [process] Symptom-reported bug may have an unrelated root cause
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: User reported "Text Generation filter gives no results"
+- **Root cause**: The actual bug was URL parameter preservation — the Sort dropdown link dropped `pipeline_tag` from the URL. The filter itself worked; the navigation destroyed the filter state. Investigation via running the app with `RUST_LOG=debug` was needed to confirm the filter logic was fine and the URL was the culprit
+- **Fix**: `applyFilter()` JS function uses `URLSearchParams` to preserve all params (sort, pipeline_tag, search) across navigation
+- **Prevention**: When a user reports "X doesn't work," don't assume X's logic is broken. Trace the full request flow: URL construction → navigation → server handler → DB query → response. Reproduce with debug logging before editing the reported component. Symptom and cause are frequently in different layers
+
+---
+
+## [process] Late-discovered cleanup bugs signal incomplete initial audit
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: `.part` file accumulation discovered late, after the dedup fix was already in progress
+- **Root cause**: During the dedup fix, `cancel_download` and `download_model` cleanup commands were not exhaustively audited for side-effect cleanup. The `.part` file gap was only found by examining disk usage later
+- **Fix**: Pre-start cleanup now deletes `.part` files; reaper cleans tracked downloads' `.part` files on startup
+- **Prevention**: When fixing a download/process lifecycle bug, audit ALL related cleanup commands (cancel, pre-start, reaper, error paths) for artifact cleanup in the same pass — not just the one path that triggered the fix. Disk-usage inspection (`du -sh models/*`) is a cheap late-stage check; run it after any download-flow change
+
+---
+
+## [process] Multi-file frontend changes need code review, not just testing
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: `card.id` inconsistency — one code path replaced `@` in the model name, another didn't, producing mismatched IDs between the download trigger and the status poller
+- **Root cause**: Two frontend files touched the same `card.id` concept with different normalization. Testing each file in isolation passed; the inconsistency only surfaced in review comparing the two files
+- **Fix**: Caught by code review; normalized both paths to use the same replacement
+- **Prevention**: For multi-file frontend changes sharing an identifier/contract, always run code review comparing the files side by side — testing each in isolation won't catch cross-file inconsistencies. Define shared normalization in one helper function and call it from both sites, so the contract can't drift

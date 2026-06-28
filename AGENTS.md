@@ -20,10 +20,10 @@ Web dashboard for managing LM Studio models via CLI and REST API.
 | `src/main.rs` | App entry, Axum router setup, logging init, shared state |
 | `src/handlers/mod.rs` | Handler module exports |
 | `src/handlers/pages.rs` | HTML page handlers (dashboard, models, runtime, logs, stats, chat, changelog); `render_or_error` helper for safe template rendering |
-| `src/handlers/api.rs` | JSON API endpoints (models, settings, chat history, test results, export/import, stats reset, `/api/health`) |
+| `src/handlers/api.rs` | JSON API endpoints (models, settings, chat history, test results, export/import, stats reset, active downloads, `/api/health`) |
 | `src/handlers/chat.rs` | Chat completion + speed test handlers; `compute_speedtest_stats` extracted for stats derivation |
-| `src/lms_client.rs` | HTTP + SSH client for LM Studio (comprehensive tracing, error classification) |
-| `src/models.rs` | Data models, CLI output parsers, consolidated quant lookup tables (characterization tests) |
+| `src/lms_client.rs` | HTTP + SSH client for LM Studio (comprehensive tracing, error classification); download lifecycle (start, status, cancel, orphan reap) |
+| `src/models.rs` | Data models (`ActiveDownload`), CLI output parsers, consolidated quant lookup tables (characterization tests) |
 | `src/stats.rs` | In-memory traffic statistics (uptime, rates, chat counter) |
 | `src/db.rs` | SQLite persistence (settings, chat, test results); `ChatMessage` parameter struct, panic-hardened unwraps (characterization tests) |
 | `build.rs` | Build script (git hash, log, build time injection) |
@@ -46,7 +46,7 @@ Web dashboard for managing LM Studio models via CLI and REST API.
 - **Dual access**: SSH for CLI commands, HTTP for LMS REST API
 - **Environment-driven config**: `LMS_LOCAL=1` switches between remote (SSH) and local mode
 - **Structured logging**: tracing at all levels (error/warn/info/debug) to stdout + daily rolling file
-- **Settings persistence**: All UI settings saved to SQLite via `/api/settings`
+- **Settings persistence**: All UI settings saved to SQLite via `/api/settings`; client-side filter state (publisher, search) persisted to localStorage on `models.html`
 - **No hardcoded hosts**: All IPs/credentials via environment variables
 - **Playwright E2E testing**: Config auto-starts the app on port 3001; OpenCode Test Agents (planner, generator, healer) drive test authoring and maintenance
 

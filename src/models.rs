@@ -58,6 +58,17 @@ pub struct CommandResult {
     pub message: String,
 }
 
+/// An active or recently-dead download, recovered from PID/name files on disk.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveDownload {
+    /// The model name/URL as passed to `lms get`.
+    pub name: String,
+    /// The PID of the download process.
+    pub pid: String,
+    /// Whether the process is still running (PID alive).
+    pub running: bool,
+}
+
 /// Query parameters for search and log endpoints.
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {

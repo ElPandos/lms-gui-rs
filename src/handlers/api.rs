@@ -255,3 +255,12 @@ pub async fn api_import(
         }
     }
 }
+
+/// JSON API: list all active downloads (running or dead) by scanning PID files.
+pub async fn api_active_downloads(State(state): State<AppState>) -> Json<Vec<ActiveDownload>> {
+    tracing::debug!("API: active downloads");
+    let mut s = state.stats.write().await;
+    s.record_api_call("api_active_downloads");
+    drop(s);
+    Json(state.lms.list_active_downloads().await.unwrap_or_default())
+}

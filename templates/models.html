@@ -5,76 +5,113 @@
     <!-- Search -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
         <h2 class="text-sm font-semibold text-yellow-400 uppercase tracking-wide mb-3">Search Models to Download</h2>
-        <!-- Source tabs + filters -->
-        <div class="flex items-end gap-3 mb-3 flex-wrap">
-            <!-- Left: source tabs -->
-            <div class="flex items-center gap-2">
+        <!-- Source tabs + search bar -->
+        <div class="flex items-center gap-3 mb-3">
+            <div class="flex items-center gap-2 shrink-0">
                 <button onclick="switchSource('lms')" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "lms" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">LM Studio</button>
                 <button onclick="switchSource('hf')" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "hf" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">HuggingFace</button>
             </div>
-            <!-- Right: all dropdown filters, labels above -->
-            {% if search_source == "lms" %}
-            <label class="flex flex-col gap-0.5 text-xs text-gray-400 ml-auto">
-                <span>Format</span>
-                <select onchange="window.location.href='/models?q={{ query }}&source=lms&format='+this.value"
-                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                    <option value="" {% if search_format.is_empty() %}selected{% endif %}>All</option>
-                    <option value="gguf" {% if search_format == "gguf" %}selected{% endif %}>GGUF</option>
-                    <option value="mlx" {% if search_format == "mlx" %}selected{% endif %}>MLX</option>
-                </select>
-            </label>
-            {% endif %}
-            {% if search_source == "hf" %}
-            <label class="flex flex-col gap-0.5 text-xs text-gray-400 ml-auto">
-                <span>Sort</span>
-                <select onchange="window.location.href='/models?q={{ query }}&source=hf&sort='+this.value"
-                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                    <option value="downloads" {% if search_sort == "downloads" %}selected{% endif %}>Most Downloaded</option>
-                    <option value="likes" {% if search_sort == "likes" %}selected{% endif %}>Most Liked</option>
-                    <option value="newest" {% if search_sort == "newest" %}selected{% endif %}>Newest</option>
-                    <option value="trending" {% if search_sort == "trending" %}selected{% endif %}>Trending</option>
-                </select>
-            </label>
-            <label class="flex flex-col gap-0.5 text-xs text-gray-400">
-                <span>Type</span>
-                <select onchange="window.location.href='/models?q={{ query }}&source=hf&sort={{ search_sort }}&pipeline_tag='+this.value"
-                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                    <option value="" {% if search_pipeline.is_empty() %}selected{% endif %}>All</option>
-                    <option value="text-generation" {% if search_pipeline == "text-generation" %}selected{% endif %}>Text Generation</option>
-                    <option value="image-text-to-text" {% if search_pipeline == "image-text-to-text" %}selected{% endif %}>Vision</option>
-                    <option value="text2text-generation" {% if search_pipeline == "text2text-generation" %}selected{% endif %}>Text2Text</option>
-                </select>
-            </label>
-            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by license (populated from results)">
-                <span>License</span>
-                <select id="license-filter" onchange="filterByLicense()"
-                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                    <option value="">All</option>
-                </select>
-            </label>
-            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by quantization (populated from results)">
-                <span>Quant</span>
-                <select id="quant-filter" onchange="filterByQuant()"
-                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                    <option value="">All</option>
-                </select>
-            </label>
-            {% endif %}
-            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by max parameter count (approximate VRAM usage)">
-                <span>Size</span>
-                <select id="max-params-filter" onchange="filterByParams()"
-                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                    <option value="0">All</option>
-                    <option value="3">≤3B (~2-3 GB)</option>
-                    <option value="7">≤7B (~4-7 GB)</option>
-                    <option value="8">≤8B (~5-8 GB)</option>
-                    <option value="13">≤13B (~8-13 GB)</option>
-                    <option value="14">≤14B (~9-14 GB)</option>
-                    <option value="27">≤27B (~15-22 GB)</option>
-                    <option value="35">≤35B (~20-28 GB)</option>
-                    <option value="70">≤70B (~35-55 GB)</option>
-                </select>
-            </label>
+            <form method="get" action="/models" class="flex gap-3 flex-1" onsubmit="showSearchSpinner()">
+                <input type="hidden" name="source" value="{{ search_source }}">
+                {% if !search_format.is_empty() %}<input type="hidden" name="format" value="{{ search_format }}">{% endif %}
+                {% if !search_pipeline.is_empty() %}<input type="hidden" name="pipeline_tag" value="{{ search_pipeline }}">{% endif %}
+                {% if search_source == "hf" %}{% if !search_sort.is_empty() %}<input type="hidden" name="sort" value="{{ search_sort }}">{% endif %}{% endif %}
+                <input type="text" name="q" value="{{ query }}" placeholder="e.g. llama, qwen, gemma, mistral"
+                    data-tip="Enter a model name or keyword to search"
+                    class="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                <button type="submit" id="search-btn"
+                    class="bg-yellow-600 hover:bg-yellow-700 px-5 py-2 rounded text-sm font-medium transition">Search</button>
+            </form>
+        </div>
+        <!-- Filter cards: server-side (search options) + client-side (result filters) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <!-- Server-side filters: affect the search query (page reload) -->
+            <div class="bg-gray-900/50 rounded-lg p-3 border border-gray-700/50">
+                <p class="text-[10px] font-semibold text-blue-400 uppercase tracking-wide mb-2" data-tip="These filters modify the search query and trigger a new server request">Search Options <span class="text-gray-500 normal-case font-normal">(server-side)</span></p>
+                <div class="flex items-end gap-3 flex-wrap">
+                    {% if search_source == "lms" %}
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400">
+                        <span>Format</span>
+                        <select onchange="applyFilter('format', this.value)"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="" {% if search_format.is_empty() %}selected{% endif %}>All</option>
+                            <option value="gguf" {% if search_format == "gguf" %}selected{% endif %}>GGUF</option>
+                            <option value="mlx" {% if search_format == "mlx" %}selected{% endif %}>MLX</option>
+                        </select>
+                    </label>
+                    {% endif %}
+                    {% if search_source == "hf" %}
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400">
+                        <span>Sort</span>
+                        <select onchange="applyFilter('sort', this.value)"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="downloads" {% if search_sort == "downloads" %}selected{% endif %}>Most Downloaded</option>
+                            <option value="likes" {% if search_sort == "likes" %}selected{% endif %}>Most Liked</option>
+                            <option value="newest" {% if search_sort == "newest" %}selected{% endif %}>Newest</option>
+                            <option value="trending" {% if search_sort == "trending" %}selected{% endif %}>Trending</option>
+                        </select>
+                    </label>
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400">
+                        <span>Type</span>
+                        <select onchange="applyFilter('pipeline_tag', this.value)"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="" {% if search_pipeline.is_empty() %}selected{% endif %}>All</option>
+                            <option value="text-generation" {% if search_pipeline == "text-generation" %}selected{% endif %}>Text Generation</option>
+                            <option value="image-text-to-text" {% if search_pipeline == "image-text-to-text" %}selected{% endif %}>Vision</option>
+                            <option value="text2text-generation" {% if search_pipeline == "text2text-generation" %}selected{% endif %}>Text2Text</option>
+                        </select>
+                    </label>
+                    {% endif %}
+                </div>
+            </div>
+            <!-- Client-side filters: narrow down results already on the page (no reload) -->
+            <div class="bg-gray-900/50 rounded-lg p-3 border border-gray-700/50">
+                <p class="text-[10px] font-semibold text-green-400 uppercase tracking-wide mb-2" data-tip="These filters narrow down the results already loaded — no page reload needed">Result Filters <span class="text-gray-500 normal-case font-normal">(client-side)</span></p>
+                <div class="flex items-end gap-3 flex-wrap">
+                    {% if search_source == "hf" %}
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by license (populated from results)">
+                        <span>License</span>
+                        <select id="license-filter" onchange="filterByLicense()"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="">All</option>
+                        </select>
+                    </label>
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by quantization (populated from results)">
+                        <span>Quant</span>
+                        <select id="quant-filter" onchange="filterByQuant()"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="">All</option>
+                        </select>
+                    </label>
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by publisher/organization">
+                        <span>Publisher</span>
+                        <select id="publisher-filter" onchange="filterByPublisher()"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="">All</option>
+                        </select>
+                    </label>
+                    {% endif %}
+                    <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by max parameter count (approximate VRAM usage)">
+                        <span>Size</span>
+                        <select id="max-params-filter" onchange="filterByParams()"
+                            class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                            <option value="0">All</option>
+                            <option value="3">≤3B (~2-3 GB)</option>
+                            <option value="7">≤7B (~4-7 GB)</option>
+                            <option value="8">≤8B (~5-8 GB)</option>
+                            <option value="13">≤13B (~8-13 GB)</option>
+                            <option value="14">≤14B (~9-14 GB)</option>
+                            <option value="27">≤27B (~15-22 GB)</option>
+                            <option value="35">≤35B (~20-28 GB)</option>
+                            <option value="70">≤70B (~35-55 GB)</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+        </div>
+        <!-- Load settings: affect model loading, not search -->
+        <div class="flex items-end gap-3 flex-wrap mt-3 pt-3 border-t border-gray-700/50">
+            <p class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mr-2 self-center">Load Settings</p>
             <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Context window size used when loading models (capped at model max)">
                 <span>Context</span>
                 <select id="default-context-length" onchange="saveModelsSettings()"
@@ -98,16 +135,6 @@
                 </select>
             </label>
         </div>
-        <form method="get" action="/models" class="flex gap-3" onsubmit="showSearchSpinner()">
-            <input type="hidden" name="source" value="{{ search_source }}">
-            {% if !search_format.is_empty() %}<input type="hidden" name="format" value="{{ search_format }}">{% endif %}
-            {% if !search_pipeline.is_empty() %}<input type="hidden" name="pipeline_tag" value="{{ search_pipeline }}">{% endif %}
-            <input type="text" name="q" value="{{ query }}" placeholder="e.g. llama, qwen, gemma, mistral"
-                data-tip="Enter a model name or keyword to search"
-                class="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
-            <button type="submit" id="search-btn"
-                class="bg-yellow-600 hover:bg-yellow-700 px-5 py-2 rounded text-sm font-medium transition">Search</button>
-        </form>
         <!-- LMS results -->
         {% if !search_results.is_empty() %}
         <p class="text-xs text-gray-400 mt-3">{{ search_results.len() }} models found</p>
@@ -254,8 +281,31 @@ function showSearchSpinner() {
 }
 
 // Switch provider tab without searching — just updates the hidden source field and reloads the page with no query
+// Rebuild the URL with all current filter params, applying one change.
+// This ensures filters compose correctly — changing Sort won't drop
+// pipeline_tag, changing Type won't drop Sort, etc.
+function applyFilter(param, value) {
+    const params = new URLSearchParams(window.location.search);
+    if (value) {
+        params.set(param, value);
+    } else {
+        params.delete(param);
+    }
+    window.location.href = '/models?' + params.toString();
+}
+
 function switchSource(source) {
-    window.location.href = '/models?source=' + source;
+    // Preserve the current search query when switching sources
+    const params = new URLSearchParams(window.location.search);
+    params.set('source', source);
+    // Drop source-specific filters when switching
+    if (source === 'lms') {
+        params.delete('sort');
+        params.delete('pipeline_tag');
+    } else {
+        params.delete('format');
+    }
+    window.location.href = '/models?' + params.toString();
 }
 
 // Extract parameter count from model name (e.g. "7b", "13B", "70b")
@@ -382,6 +432,52 @@ function filterByQuant() {
     });
 }
 
+// Publisher filter (HF only, client-side, populated from visible results)
+function getCardPublisher(card) {
+    const nameEl = card.querySelector('.font-mono');
+    if (!nameEl) return '';
+    const text = nameEl.textContent.trim();
+    // model_id is "publisher/model-name" — publisher is before the first /
+    const slashIdx = text.indexOf('/');
+    return slashIdx > 0 ? text.substring(0, slashIdx) : '';
+}
+
+function populatePublisherFilter() {
+    const select = document.getElementById('publisher-filter');
+    if (!select) return;
+    const publishers = new Set();
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        const pub = getCardPublisher(card);
+        if (pub) publishers.add(pub);
+    });
+    const current = select.value;
+    select.innerHTML = '<option value="">All</option>';
+    [...publishers].sort().forEach(pub => {
+        const opt = document.createElement('option');
+        opt.value = pub;
+        opt.textContent = pub;
+        select.appendChild(opt);
+    });
+    if (current && [...select.options].some(o => o.value === current)) {
+        select.value = current;
+    }
+}
+
+function filterByPublisher() {
+    const filter = document.getElementById('publisher-filter')?.value || '';
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        if (!filter || getCardPublisher(card) === filter) {
+            const max = parseInt(document.getElementById('max-params-filter')?.value || '0');
+            if (max === 0) { card.style.display = ''; return; }
+            const name = card.querySelector('.font-mono')?.textContent?.trim() || '';
+            const params = extractParams(name);
+            card.style.display = (params === 0 || params <= max) ? '' : 'none';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
 // Quantization selection — click a badge to select it for download.
 // `lms get` supports `model@quant` syntax (e.g. qwen/qwen3.5-9b@q8_0).
 // This tracks the selected quant per model card and highlights it.
@@ -419,6 +515,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     populateLicenseFilter();
     populateQuantFilter();
+    populatePublisherFilter();
+    restoreClientFilters();
 });
 
 async function deleteModel(name, btn) {
@@ -445,50 +543,117 @@ function removeDownloadActive(name) {
     sessionStorage.setItem('activeDownloads', JSON.stringify(dl));
 }
 
+// Generate a valid HTML element ID from a download name.
+// Strips all non-alphanumeric chars to avoid invalid IDs (spaces, @, :, etc.)
+// and ensures consistency between all three card-creation paths.
+function dlCardId(name) {
+    return 'active-dl-' + name.replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+// Fetch active downloads from the server (PID files on disk).
+// This catches downloads that aren't in sessionStorage (browser restart,
+// API-initiated downloads, cleared storage).
+async function fetchActiveDownloadsFromServer() {
+    try {
+        const resp = await fetch('/api/downloads/active');
+        const downloads = await resp.json();
+        if (!downloads || downloads.length === 0) return;
+
+        const existing = getActiveDownloads(); // sessionStorage names
+        const list = document.getElementById('active-downloads-list');
+        const section = document.getElementById('active-downloads-section');
+
+        for (const dl of downloads) {
+            // Skip if already shown via sessionStorage (exact name match only)
+            if (existing[dl.name]) continue;
+
+            // Also skip if a card with this name already exists in the DOM
+            const cardId = dlCardId(dl.name);
+            if (document.getElementById(cardId)) continue;
+
+            // Add to sessionStorage so it persists
+            setDownloadActive(dl.name);
+
+            // Create the card
+            section.classList.remove('hidden');
+            const card = document.createElement('div');
+            card.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
+            card.id = cardId;
+            const params = extractParams(dl.name);
+            const sizeBadge = params > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${params}B ${estimateSize(params)}</span>` : '';
+            card.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-mono text-gray-100">${dl.name} ${sizeBadge}</p>
+                        <span class="dl-info text-xs text-gray-400">Checking...</span>
+                        <p class="dl-path text-xs text-gray-500 font-mono mt-0.5 hidden"></p>
+                    </div>
+                    <button onclick="cancelActiveDownload('${dl.name}', this)"
+                        data-tip="Cancel download of ${dl.name}"
+                        class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
+                </div>
+                <div class="dl-progress mt-2">
+                    <div class="w-full bg-gray-700 rounded-full h-1.5">
+                        <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>`;
+            list.appendChild(card);
+            pollActiveDownload(dl.name, card);
+        }
+    } catch (e) {
+        console.error('Failed to fetch active downloads:', e);
+    }
+}
+
 // On page load: show active downloads in the dedicated section
 document.addEventListener('DOMContentLoaded', () => {
     const active = getActiveDownloads();
     const names = Object.keys(active);
-    if (names.length === 0) return;
 
-    const section = document.getElementById('active-downloads-section');
-    const list = document.getElementById('active-downloads-list');
-    section.classList.remove('hidden');
+    if (names.length > 0) {
+        const section = document.getElementById('active-downloads-section');
+        const list = document.getElementById('active-downloads-list');
+        section.classList.remove('hidden');
 
-    names.forEach(name => {
-        const card = document.createElement('div');
-        card.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
-        card.id = 'active-dl-' + name.replace(/\//g, '_');
-        const params = extractParams(name);
-        const sizeBadge = params > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${params}B ${estimateSize(params)}</span>` : '';
-        card.innerHTML = `
-            <div class="flex items-center justify-between">
-                <div class="min-w-0 flex-1">
-                    <p class="text-sm font-mono text-gray-100">${name} ${sizeBadge}</p>
-                    <span class="dl-info text-xs text-gray-400">Checking...</span>
+        names.forEach(name => {
+            const card = document.createElement('div');
+            card.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
+            card.id = dlCardId(name);
+            const params = extractParams(name);
+            const sizeBadge = params > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${params}B ${estimateSize(params)}</span>` : '';
+            card.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-mono text-gray-100">${name} ${sizeBadge}</p>
+                        <span class="dl-info text-xs text-gray-400">Checking...</span>
+                        <p class="dl-path text-xs text-gray-500 font-mono mt-0.5 hidden"></p>
+                    </div>
+                    <button onclick="cancelActiveDownload('${name}', this)"
+                        data-tip="Cancel download of ${name}"
+                        class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
                 </div>
-                <button onclick="cancelActiveDownload('${name}', this)"
-                    data-tip="Cancel download of ${name}"
-                    class="ml-3 shrink-0 text-xs bg-red-700 hover:bg-red-600 px-3 py-1 rounded transition">✗ Cancel</button>
-            </div>
-            <div class="dl-progress mt-2">
-                <div class="w-full bg-gray-700 rounded-full h-1.5">
-                    <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
-                </div>
-            </div>`;
-        list.appendChild(card);
-        pollActiveDownload(name, card);
-    });
+                <div class="dl-progress mt-2">
+                    <div class="w-full bg-gray-700 rounded-full h-1.5">
+                        <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
+                    </div>
+                </div>`;
+            list.appendChild(card);
+            pollActiveDownload(name, card);
+        });
 
-    // Also resume any matching search cards
-    document.querySelectorAll('[id^=dl-card]').forEach(card => {
-        const nameEl = card.querySelector('.font-mono');
-        if (!nameEl) return;
-        const name = nameEl.textContent.trim();
-        if (active[name]) {
-            card.remove(); // remove from search results since it's in active downloads section
-        }
-    });
+        // Also resume any matching search cards
+        document.querySelectorAll('[id^=dl-card]').forEach(card => {
+            const nameEl = card.querySelector('.font-mono');
+            if (!nameEl) return;
+            const name = nameEl.textContent.trim();
+            if (active[name]) {
+                card.remove(); // remove from search results since it's in active downloads section
+            }
+        });
+    }
+
+    // Also fetch from server to catch downloads not in sessionStorage
+    fetchActiveDownloadsFromServer();
 });
 
 function cancelActiveDownload(name, btn) {
@@ -503,23 +668,82 @@ function cancelActiveDownload(name, btn) {
     showToast('Download cancelled', false);
 }
 
+function showRetryButton(card, name) {
+    const btn = card.querySelector('button');
+    if (!btn) return;
+    btn.textContent = '↻ Retry';
+    btn.setAttribute('data-tip', 'Retry download');
+    btn.classList.remove('bg-red-700', 'hover:bg-red-600');
+    btn.classList.add('bg-blue-700', 'hover:bg-blue-600');
+    btn.onclick = () => retryActiveDownload(name, btn);
+}
+
+async function retryActiveDownload(name, btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    // Cancel the stalled/failed download (kill PID, clean up partial files)
+    await fetch(`/models/download/status?q=${encodeURIComponent(name)}&clear=1`);
+    // Restart the download
+    const resp = await apiPost('/models/download', {model_name: name});
+    btn.disabled = false;
+    const card = btn.closest('[id^=active-dl]');
+    if (resp && resp.success) {
+        if (card) {
+            // Reset card UI
+            const barEl = card.querySelector('.dl-bar');
+            const info = card.querySelector('.dl-info');
+            if (barEl) {
+                barEl.style.width = '0%';
+                barEl.classList.remove('bg-red-500', 'bg-green-500');
+                barEl.classList.add('bg-blue-500');
+            }
+            if (info) {
+                info.textContent = 'Starting...';
+                info.classList.remove('text-red-400');
+            }
+            // Restore cancel button
+            btn.textContent = '✗ Cancel';
+            btn.setAttribute('data-tip', 'Cancel download');
+            btn.classList.remove('bg-blue-700', 'hover:bg-blue-600');
+            btn.classList.add('bg-red-700', 'hover:bg-red-600');
+            btn.onclick = () => cancelActiveDownload(name, btn);
+            // Restart polling
+            pollActiveDownload(name, card);
+        }
+        showToast('Retrying download: ' + name, false);
+    } else {
+        btn.textContent = '↻ Retry';
+        showToast('Retry failed: ' + name, true);
+    }
+}
+
 function pollActiveDownload(name, card) {
     const barEl = card.querySelector('.dl-bar');
     const info = card.querySelector('.dl-info');
-    let pollCount = 0;
+    const pathEl = card.querySelector('.dl-path');
     let noLogCount = 0;
+    let lastPct = -1;
+    let noProgressCount = 0;
     const interval = setInterval(async () => {
-        pollCount++;
-        if (pollCount > 60) {
+        noProgressCount++;
+        // Stall detection: no percentage change for 200 polls (200 × 3s = 10 min)
+        if (noProgressCount >= 200) {
             clearInterval(interval);
-            info.textContent = 'Stalled (no progress for 3 min)';
+            info.textContent = 'Stalled (no progress for 10 min)';
             info.classList.add('text-red-400');
+            showRetryButton(card, name);
             showToast('Download stalled: ' + name, true);
             return;
         }
         try {
             const resp = await fetch(`/models/download/status?q=${encodeURIComponent(name)}`);
             const data = await resp.json();
+            // Extract on-disk download path (server prepends "PATH:..." line)
+            const pathMatch = data.message.match(/^PATH:(.+)$/m);
+            if (pathMatch && pathEl) {
+                pathEl.textContent = '📂 ' + pathMatch[1].trim();
+                pathEl.classList.remove('hidden');
+            }
             const msg = data.message.toLowerCase();
             if (msg.includes('already') || msg.includes('download completed') || msg.includes('downloaded') || msg.includes('satisfied') || msg.includes('finalizing')) {
                 clearInterval(interval);
@@ -543,6 +767,11 @@ function pollActiveDownload(name, card) {
                 if (matches.length > 0) {
                     const last = matches[matches.length - 1][1].replace(',', '.');
                     const pct = Math.round(parseFloat(last));
+                    // Reset stall timer when percentage advances
+                    if (pct !== lastPct) {
+                        noProgressCount = 0;
+                        lastPct = pct;
+                    }
                     if (pct >= 100) {
                         clearInterval(interval);
                         removeDownloadActive(name);
@@ -576,14 +805,16 @@ function pollActiveDownload(name, card) {
             if (msg.includes('no log')) {
                 // Log file may not exist yet (startup race) — retry for up to 10 ticks before giving up
                 noLogCount = (noLogCount || 0) + 1;
+                // Don't count startup phase toward stall timer
+                noProgressCount = 0;
                 if (noLogCount >= 10) {
                     clearInterval(interval);
                     removeDownloadActive(name);
                     info.textContent = 'Download failed to start';
                     info.classList.add('text-red-400');
                     card.querySelector('.dl-bar')?.classList.replace('bg-blue-500', 'bg-red-500');
+                    showRetryButton(card, name);
                     showToast('Download failed to start: ' + name, true);
-                    setTimeout(() => { card.remove(); /* refresh local disk in case partial */ refreshLocalDisk(); }, 5000);
                 }
                 return;  // don't process further on this tick
             }
@@ -593,8 +824,8 @@ function pollActiveDownload(name, card) {
                 info.textContent = 'Download failed';
                 info.classList.add('text-red-400');
                 card.querySelector('.dl-bar')?.classList.replace('bg-blue-500', 'bg-red-500');
+                showRetryButton(card, name);
                 showToast('Download failed: ' + name, true);
-                setTimeout(() => { card.remove(); refreshLocalDisk(); }, 5000);
                 return;
             }
         } catch (e) { clearInterval(interval); }
@@ -623,13 +854,14 @@ async function startDownload(name, btn) {
         section.classList.remove('hidden');
         const dlCard = document.createElement('div');
         dlCard.className = 'bg-gray-900 rounded px-4 py-3 border border-gray-700';
-        dlCard.id = 'active-dl-' + name.replace(/\//g, '_');
+        dlCard.id = dlCardId(name);
         const quantBadge = selectedQuant ? `<span class="text-xs px-1.5 py-0.5 rounded bg-cyan-700/40 text-cyan-300 font-sans">${selectedQuant}</span>` : '';
         dlCard.innerHTML = `
             <div class="flex items-center justify-between">
                 <div class="min-w-0 flex-1">
                     <p class="text-sm font-mono text-gray-100">${name} ${quantBadge} ${extractParams(name) > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${extractParams(name)}B ${estimateSize(extractParams(name))}</span>` : ''}</p>
                     <span class="dl-info text-xs text-gray-400">Starting...</span>
+                    <p class="dl-path text-xs text-gray-500 font-mono mt-0.5 hidden"></p>
                 </div>
                 <button onclick="cancelActiveDownload('${downloadName}', this)"
                     data-tip="Cancel download"
@@ -687,8 +919,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// Settings persistence
-const MODELS_SETTING_IDS = ['max-params-filter', 'disk-refresh-interval', 'default-context-length', 'default-parallel'];
+// Settings persistence — includes client-side filters so they survive
+// page navigation and page reloads. Client-side filter values (license,
+// quant, publisher) are restored after their dropdowns are populated
+// from the page results, see restoreClientFilters() below.
+const MODELS_SETTING_IDS = ['max-params-filter', 'disk-refresh-interval', 'default-context-length', 'default-parallel', 'license-filter', 'quant-filter', 'publisher-filter'];
 function saveModelsSettings() {
     const settings = {};
     MODELS_SETTING_IDS.forEach(id => { const el = document.getElementById(id); if (el) settings[id] = el.value; });
@@ -701,17 +936,40 @@ async function loadModelsSettings() {
         const entry = data.find(([k]) => k === 'models_settings');
         if (entry) {
             const settings = JSON.parse(entry[1]);
-            Object.entries(settings).forEach(([id, val]) => {
-                const el = document.getElementById(id);
-                if (el) el.value = val;
+            window._savedModelsSettings = settings;
+            // Restore non-client-filter settings immediately
+            ['max-params-filter', 'disk-refresh-interval', 'default-context-length', 'default-parallel'].forEach(id => {
+                if (settings[id]) { const el = document.getElementById(id); if (el) el.value = settings[id]; }
             });
             filterByParams();
             setDiskRefreshInterval();
         }
     } catch(e) {}
 }
+// Restore client-side filter values AFTER their dropdowns have been
+// populated from page results. Called from the DOMContentLoaded handler
+// that runs populateLicenseFilter/populateQuantFilter/populatePublisherFilter.
+function restoreClientFilters() {
+    const settings = window._savedModelsSettings;
+    if (!settings) return;
+    ['license-filter', 'quant-filter', 'publisher-filter'].forEach(id => {
+        if (settings[id]) {
+            const el = document.getElementById(id);
+            if (el && [...el.options].some(o => o.value === settings[id])) {
+                el.value = settings[id];
+            }
+        }
+    });
+    // Apply the restored filters
+    filterByLicense();
+    filterByQuant();
+    filterByPublisher();
+}
 loadModelsSettings();
 // Save on filter change
 document.getElementById('max-params-filter').addEventListener('change', saveModelsSettings);
+document.getElementById('license-filter')?.addEventListener('change', saveModelsSettings);
+document.getElementById('quant-filter')?.addEventListener('change', saveModelsSettings);
+document.getElementById('publisher-filter')?.addEventListener('change', saveModelsSettings);
 </script>
 {% endblock %}

@@ -79,6 +79,7 @@ async fn main() {
         .route("/models/download/status", get(handlers::download_status))
         .route("/models/load", post(handlers::load_model))
         .route("/models/download/cancel", post(handlers::cancel_download))
+        .route("/api/downloads/active", get(handlers::api_active_downloads))
         .route("/models/load/status", get(handlers::load_status))
         .route("/models/unload", post(handlers::unload_model))
         .route("/models/delete", post(handlers::delete_model))
