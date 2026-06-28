@@ -1,3 +1,7 @@
+//! Build script — injects git hash, recent log, and build time into the crate
+//! as compile-time env vars (`GIT_HASH`, `GIT_LOG`, `BUILD_TIME`) consumed by
+//! the changelog template.
+
 use std::process::Command;
 
 fn main() {

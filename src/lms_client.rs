@@ -3,15 +3,19 @@
 //! When `LMS_LOCAL=1` env var is set, commands run locally (no SSH).
 //! Otherwise, commands are sent over SSH with multiplexing.
 
-use reqwest::Client;
 use crate::models::{Model, ModelsResponse, RuntimeInfo};
+use reqwest::Client;
 use std::process::Command;
 
+/// Build the `user@host` SSH target from `ENV_USER_JUMP_155_HOST` and
+/// `ENV_IP_JUMP_155_HOST` environment variables (panics if unset).
 fn ssh_host() -> String {
     let user = std::env::var("ENV_USER_JUMP_155_HOST").expect("ENV_USER_JUMP_155_HOST must be set");
     let ip = std::env::var("ENV_IP_JUMP_155_HOST").expect("ENV_IP_JUMP_155_HOST must be set");
     format!("{}@{}", user, ip)
 }
+
+/// Filesystem path for the SSH ControlMaster multiplexing socket.
 const SSH_MUX_PATH: &str = "/tmp/lms-gui-ssh-mux";
 
 /// HTTP + SSH client for LM Studio operations.
@@ -30,10 +34,32 @@ pub struct LmsClient {
 fn strip_ansi(input: &str) -> String {
     use regex::Regex;
     use std::sync::LazyLock;
-    static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\r").unwrap()
-    });
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\r").unwrap());
     RE.replace_all(input, "").to_string()
+}
+
+/// Classify a reqwest error into a user-friendly message.
+fn classify_http_error(e: &reqwest::Error, url: &str) -> String {
+    if e.is_connect() {
+        format!("Cannot reach LMS API at {} — is LM Studio running?", url)
+    } else if e.is_timeout() {
+        format!("LMS API timed out at {} — server may be overloaded", url)
+    } else {
+        format!("Failed to connect to LMS API at {}: {}", url, e)
+    }
+}
+
+/// Classify a CLI command failure (stderr from run_cmd) into a user-friendly message.
+fn classify_cli_error(stderr: &str) -> String {
+    if stderr.contains("Invalid passkey") {
+        "LMS CLI authentication failed — run 'lms server stop && lms server start' on the host"
+            .to_string()
+    } else if stderr.contains("command not found") || stderr.contains("not found") {
+        "lms CLI not installed on host — verify $HOME/.lmstudio/bin is in PATH".to_string()
+    } else {
+        format!("Command failed: {}", stderr)
+    }
 }
 
 impl LmsClient {
@@ -45,14 +71,26 @@ impl LmsClient {
             tracing::info!("Establishing SSH ControlMaster connection");
             let _ = Command::new("ssh")
                 .args([
-                    "-o", "ControlMaster=auto",
-                    "-o", &format!("ControlPath={}", SSH_MUX_PATH),
-                    "-o", "ControlPersist=600",
-                    "-o", "ConnectTimeout=5",
+                    "-o",
+                    "ControlMaster=auto",
+                    "-o",
+                    &format!("ControlPath={}", SSH_MUX_PATH),
+                    "-o",
+                    "ControlPersist=600",
+                    "-o",
+                    "ConnectTimeout=5",
                     "-fN",
                     &ssh_host(),
                 ])
-                .spawn();
+                .status();
+            // Wait for the master socket to be ready (spawn is non-blocking)
+            for i in 0..20 {
+                if std::path::Path::new(SSH_MUX_PATH).exists() {
+                    tracing::debug!(attempts = i, "SSH ControlMaster socket ready");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
 
         tracing::info!(local_mode, base_url = %base_url, "LmsClient initialized");
@@ -64,28 +102,203 @@ impl LmsClient {
         }
     }
 
+    /// Probe LMS API and CLI reachability. Returns (api_ok, cli_ok, api_error, cli_error).
+    pub async fn health_check(&self) -> (bool, bool, String, String) {
+        // API check: GET {base_url}/v1/models with 3s timeout
+        let api_result = {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .unwrap_or_else(|_| self.client.clone());
+            let url = format!("{}/v1/models", self.base_url);
+            client.get(&url).send().await
+        };
+        let (api_ok, api_error) = match api_result {
+            Ok(resp) if resp.status().is_success() => (true, String::new()),
+            Ok(resp) => (false, format!("HTTP {}", resp.status())),
+            Err(e) => (
+                false,
+                classify_http_error(&e, &format!("{}/v1/models", self.base_url)),
+            ),
+        };
+
+        // CLI check: run "lms --version" (lightweight, always works if CLI installed)
+        let cli_result = self.run_cmd("lms --version 2>&1 || true").await;
+        let (cli_ok, cli_error) = match cli_result {
+            Ok(output) if output.contains("lms") || output.contains("version") => {
+                (true, String::new())
+            }
+            Ok(output) => (false, output),
+            Err(e) => (false, e),
+        };
+
+        (api_ok, cli_ok, api_error, cli_error)
+    }
+
     /// Fetch the model list from the LMS REST API.
     pub async fn list_models(&self) -> Result<Vec<Model>, String> {
         tracing::debug!("Fetching model list from LMS API");
-        let resp = self.client
-            .get(format!("{}/v1/models", self.base_url))
-            .send()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to connect to LMS API");
-                format!("Failed to connect to LMS: {}", e)
-            })?;
+        let url = format!("{}/v1/models", self.base_url);
+        let resp = self.client.get(&url).send().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to connect to LMS API");
+            classify_http_error(&e, &url)
+        })?;
 
-        let body: ModelsResponse = resp
-            .json()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to parse LMS models response");
-                format!("Failed to parse response: {}", e)
-            })?;
+        let body: ModelsResponse = resp.json().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to parse LMS models response");
+            format!("Failed to parse response: {}", e)
+        })?;
 
         tracing::debug!(count = body.data.len(), "Fetched models from API");
         Ok(body.data)
+    }
+
+    /// Fetch the `max_context_length` for a model from the LMS v0 REST API.
+    ///
+    /// Queries `GET /api/v0/models` and locates the entry whose `id` matches
+    /// `model_id`. Returns `Ok(Some(n))` if found, `Ok(None)` if the model
+    /// isn't listed or has no `max_context_length`, and `Err` on HTTP/parse failure.
+    pub async fn fetch_max_context(&self, model_id: &str) -> Result<Option<u64>, String> {
+        let safe_id = Self::sanitize(model_id);
+        tracing::debug!(model = %safe_id, "Querying v0 API for max_context_length");
+
+        let url = format!("{}/api/v0/models", self.base_url);
+        let resp = self.client.get(&url).send().await.map_err(|e| {
+            tracing::error!(model = %safe_id, error = %e, "Failed to connect to LMS v0 API");
+            classify_http_error(&e, &url)
+        })?;
+
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            tracing::error!(model = %safe_id, error = %e, "Failed to parse LMS v0 models response");
+            format!("Failed to parse v0 response: {}", e)
+        })?;
+
+        let result = body["data"].as_array().and_then(|arr| {
+            arr.iter().find_map(|m| {
+                let id = m["id"].as_str()?;
+                if id == safe_id {
+                    m["max_context_length"].as_u64()
+                } else {
+                    None
+                }
+            })
+        });
+
+        tracing::debug!(model = %safe_id, result = ?result, "v0 API max_context_length lookup complete");
+        Ok(result)
+    }
+
+    /// Fetch all models with rich metadata from LM Studio v0 REST API.
+    pub async fn fetch_v0_models(&self) -> Result<Vec<crate::models::LmsV0Model>, String> {
+        tracing::debug!("Fetching v0 model metadata from LMS API");
+        let url = format!("{}/api/v0/models", self.base_url);
+        let resp = self.client.get(&url).send().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to fetch v0 models");
+            classify_http_error(&e, &url)
+        })?;
+        let body: crate::models::LmsV0ModelsResponse = resp.json().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to parse v0 models response");
+            format!("Failed to parse v0 response: {}", e)
+        })?;
+        tracing::debug!(count = body.data.len(), "Fetched v0 models");
+        Ok(body.data)
+    }
+
+    /// List models with context metadata, merging `/v1/models` with `/api/v0/models`.
+    ///
+    /// The OpenAI-compatible `/v1/models` endpoint omits `max_context_length`
+    /// (always null), so we join it with the v0 internal API which returns
+    /// the real `max_context_length` and `loaded_context_length` for each model.
+    /// Falls back to the bare v1 list if the v0 endpoint is unavailable.
+    pub async fn list_models_with_context(&self) -> Result<Vec<Model>, String> {
+        let (v1_result, v0_result) = tokio::join!(self.list_models(), self.fetch_v0_models());
+        let mut v1 = v1_result?;
+        let v0 = v0_result.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "v0 API unavailable; returning v1 models without context metadata");
+            vec![]
+        });
+        if v0.is_empty() {
+            return Ok(v1);
+        }
+        let v0_map: std::collections::HashMap<&str, &crate::models::LmsV0Model> =
+            v0.iter().map(|m| (m.id.as_str(), m)).collect();
+        for model in &mut v1 {
+            if let Some(v0m) = v0_map.get(model.id.as_str()) {
+                if model.max_context_length.is_none() {
+                    model.max_context_length = v0m.max_context_length;
+                }
+            }
+        }
+        Ok(v1)
+    }
+
+    /// List locally-downloaded models via the v0 REST API (fast, structured, daemon-backed).
+    /// Falls back to `lms ls` text parsing if the API is unavailable.
+    pub async fn list_local_models_v0(&self) -> Result<Vec<crate::models::LocalModel>, String> {
+        match self.fetch_v0_models().await {
+            Ok(v0_models) => {
+                // Resolve case-preserved filesystem paths with a single find command
+                let find_output = self
+                    .run_cmd("find $HOME/.lmstudio/models -maxdepth 2 -type d 2>/dev/null")
+                    .await
+                    .unwrap_or_default();
+                let find_lines: Vec<&str> = find_output
+                    .lines()
+                    .filter(|l| !l.is_empty() && !l.ends_with("/models"))
+                    .collect();
+
+                let models: Vec<crate::models::LocalModel> = v0_models
+                    .into_iter()
+                    .map(|v0| {
+                        // Match the v0 id (lowercase) against directory names (case-insensitive)
+                        let file_path = find_lines
+                            .iter()
+                            .find(|line| {
+                                let dir_name =
+                                    line.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+                                dir_name.eq_ignore_ascii_case(&v0.id)
+                                    || dir_name.to_lowercase().contains(&v0.id.to_lowercase())
+                            })
+                            .map(|line| line.trim().to_string())
+                            .unwrap_or_default();
+
+                        crate::models::LocalModel {
+                            name: v0.id,
+                            params: String::new(), // v0 API doesn't provide param count
+                            arch: v0.arch,
+                            size: String::new(), // v0 API doesn't provide file size
+                            device: String::new(),
+                            status: if v0.state == "loaded" {
+                                "LOADED".to_string()
+                            } else {
+                                String::new()
+                            },
+                            model_type: match v0.r#type.as_str() {
+                                "llm" | "vlm" => "LLM".to_string(),
+                                "embeddings" => "Embedding".to_string(),
+                                _ => "LLM".to_string(),
+                            },
+                            max_context: v0
+                                .max_context_length
+                                .map(|n| n.to_string())
+                                .unwrap_or_default(),
+                            quantization: v0.quantization,
+                            publisher: v0.publisher,
+                            compat_type: v0.compatibility_type,
+                            model_vtype: v0.r#type,
+                            file_path,
+                        }
+                    })
+                    .collect();
+                tracing::debug!(count = models.len(), "Built local models from v0 API");
+                Ok(models)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "v0 API failed, falling back to lms ls");
+                let raw = self.list_local_models().await?;
+                Ok(crate::models::parse_local_models(&raw))
+            }
+        }
     }
 
     /// List locally-downloaded models via `lms ls`.
@@ -98,63 +311,144 @@ impl LmsClient {
         self.run_cmd("lms ps").await
     }
 
-    /// Start a background model download via `lms get`.
+    /// Start a background model download via `lms get`, with PID tracking.
     pub async fn download_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
-        tracing::info!(model = %safe_name, "Starting model download");
-        let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
-        // Kill any existing download for this model before starting fresh
-        let _ = self.run_cmd(&format!("pkill -f 'lms get {}' 2>/dev/null; rm -f {}", safe_name, log_file)).await;
+        let dl_id = Self::dl_id(name);
+        let log_file = format!("/tmp/lms-dl-{}.log", dl_id);
+        let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
+        tracing::info!(model = %safe_name, dl_id = %dl_id, "Starting model download");
+        // Kill any existing download for this model before starting fresh (wait for it to die)
+        let _ = self
+            .run_cmd(&format!(
+                "pkill -f '[l]ms get {}' 2>/dev/null; sleep 0.5; rm -f {} {}",
+                safe_name, log_file, pid_file
+            ))
+            .await;
+        // Start download in background, write PID to file
         self.run_cmd(&format!(
-            "(lms get {} -y > {} 2>&1 &) && echo \"started\"",
-            safe_name, log_file
-        )).await
+            "(lms get {} -y > {} 2>&1 & echo $! > {} ) && echo 'started'",
+            safe_name, log_file, pid_file
+        ))
+        .await
     }
 
-    /// Unload and delete a model from disk.
+    /// Cancel an in-progress download by killing the tracked PID.
+    pub async fn cancel_download(&self, name: &str) -> Result<String, String> {
+        let safe_name = Self::sanitize(name);
+        let dl_id = Self::dl_id(name);
+        let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
+        let log_file = format!("/tmp/lms-dl-{}.log", dl_id);
+        tracing::info!(model = %safe_name, "Cancelling download");
+        // Kill by PID if file exists, fallback to pkill, then clean up
+        let cmd = format!(
+            "pid=$(cat {} 2>/dev/null); if [ -n \"$pid\" ]; then kill $pid 2>/dev/null; fi; pkill -f '[l]ms get {}' 2>/dev/null; rm -f {} {} && echo 'cancelled'",
+            pid_file, safe_name, pid_file, log_file
+        );
+        self.run_cmd(&cmd).await
+    }
+
+    /// Kill any orphaned download processes (call on server startup).
+    pub async fn reap_orphaned_downloads(&self) -> Result<String, String> {
+        tracing::info!("Reaping orphaned download processes");
+        let cmd =
+            "pkill -f '[l]ms get' 2>/dev/null; rm -f /tmp/lms-dl-*.pid 2>/dev/null; echo 'reaped'";
+        match self.run_cmd(cmd).await {
+            Ok(msg) => Ok(msg),
+            Err(e) => {
+                // pkill exits non-zero when no process matches — that's the normal case here.
+                // As long as SSH itself succeeded, treat as success.
+                tracing::warn!(error = %e, "Reaper command non-zero (likely no orphans — this is normal)");
+                Ok("reaped (no orphans)".to_string())
+            }
+        }
+    }
+
+    /// Unload and delete a model from disk (hardened: exact match, requires unload success).
     pub async fn delete_model(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
+        let dl_id = Self::dl_id(name);
+        let pid_file = format!("/tmp/lms-dl-{}.pid", dl_id);
         tracing::warn!(model = %safe_name, "Deleting model from disk");
-        // Model name like "google/gemma-4-e2b" → search for directory containing "gemma-4-e2b"
+        // Refuse to delete if a download for this model is still running
+        let pid_check = self
+            .run_cmd(&format!(
+                "test -f {} && echo 'running' || echo 'ok'",
+                pid_file
+            ))
+            .await
+            .unwrap_or_default();
+        if pid_check.contains("running") {
+            return Err(
+                "Cannot delete: a download for this model is still in progress. Cancel it first."
+                    .to_string(),
+            );
+        }
+        // Require unload success (&& not ;) — refuse to delete if unload fails
+        // Use exact directory name match (basename equals search_part), not substring -iname
         let search_part = safe_name.split('/').next_back().unwrap_or(&safe_name);
         self.run_cmd(&format!(
-            "lms unload {} 2>/dev/null; dir=$(find $HOME/.lmstudio/models -maxdepth 2 -type d -iname '*{}*' | head -1); if [ -n \"$dir\" ]; then rm -rf \"$dir\" && echo 'Deleted'; else echo 'Not found'; fi",
+            "lms unload {} 2>/dev/null && dir=$(find $HOME/.lmstudio/models -maxdepth 3 -type d -name '{}' | head -1) && if [ -n \"$dir\" ]; then rm -rf \"$dir\" && echo 'Deleted'; else echo 'Not found'; fi",
             safe_name, search_part
         )).await
     }
 
     /// Get the tail of a model's download log file.
     pub async fn download_status(&self, name: &str) -> Result<String, String> {
-        let safe_name = Self::sanitize(name);
-        let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
-        self.run_cmd(&format!("tail -c 500 {} 2>/dev/null || echo 'no log'", log_file)).await
+        let log_file = format!("/tmp/lms-dl-{}.log", Self::dl_id(name));
+        self.run_cmd(&format!(
+            "tail -c 500 {} 2>/dev/null || echo 'no log'",
+            log_file
+        ))
+        .await
     }
 
     /// Switch the active inference runtime via `lms runtime select`.
     pub async fn select_runtime(&self, name: &str) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
-        self.run_cmd(&format!("lms runtime select {}", safe_name)).await
+        self.run_cmd(&format!("lms runtime select {}", safe_name))
+            .await
     }
 
     /// Apply pending runtime updates.
     pub async fn update_runtime(&self) -> Result<String, String> {
-        self.run_cmd("lms runtime update --apply 2>&1 || lms runtime update -y 2>&1").await
+        self.run_cmd("lms runtime update --apply 2>&1 || lms runtime update -y 2>&1")
+            .await
     }
 
-
     /// Load a model into GPU memory in the background.
-    pub async fn load_model(&self, name: &str) -> Result<String, String> {
+    ///
+    /// `context_length` and `parallel` are optional load-time overrides.
+    /// `parallel` controls continuous-batching slots (default 4 in LMS);
+    /// set to 1 for full per-request context (best for agents/IDEs).
+    pub async fn load_model(
+        &self,
+        name: &str,
+        context_length: Option<u64>,
+        parallel: Option<u32>,
+    ) -> Result<String, String> {
         let safe_name = Self::sanitize(name);
         tracing::info!(model = %safe_name, "Loading model into GPU memory");
+        tracing::debug!(model = %safe_name, context_length = ?context_length, parallel = ?parallel, "Loading model with context length and parallel slots");
+        let ctx_flag = match context_length {
+            Some(n) if n > 0 => format!(" --context-length {}", n),
+            _ => String::new(),
+        };
+        let parallel_flag = match parallel {
+            Some(n) if n > 0 => format!(" --parallel {}", n),
+            _ => String::new(),
+        };
         self.run_cmd(&format!(
-            "(lms load {} --gpu max -y > /tmp/lms-load.log 2>&1 &) && echo 'Loading started'",
-            safe_name
-        )).await
+            "(lms load {} --gpu max{}{} -y > /tmp/lms-load.log 2>&1 &) && echo 'Loading started'",
+            safe_name, ctx_flag, parallel_flag
+        ))
+        .await
     }
 
     /// Check the current model load status from the log file.
     pub async fn load_status(&self) -> Result<String, String> {
-        self.run_cmd("tail -3 /tmp/lms-load.log 2>/dev/null || echo 'idle'").await
+        self.run_cmd("tail -3 /tmp/lms-load.log 2>/dev/null || echo 'idle'")
+            .await
     }
 
     /// Unload a model (or all models with `--all`) from memory.
@@ -188,35 +482,61 @@ impl LmsClient {
     }
 
     /// Search for models on LM Studio Hub via `lms get`.
-    pub async fn search_models(&self, query: &str) -> Result<String, String> {
+    pub async fn search_models(
+        &self,
+        query: &str,
+        format_filter: Option<&str>,
+    ) -> Result<String, String> {
         let mut cmd = String::from("timeout 15 lms get");
         if !query.is_empty() {
             cmd.push_str(&format!(" {}", Self::sanitize(query)));
+        }
+        match format_filter {
+            Some("gguf") => cmd.push_str(" --gguf"),
+            Some("mlx") => cmd.push_str(" --mlx"),
+            _ => {}
         }
         cmd.push_str(" 2>&1 || true");
         self.run_cmd(&cmd).await
     }
 
     /// Search HuggingFace Hub for GGUF models via their API.
-    pub async fn search_huggingface(&self, query: &str, sort: &str) -> Result<Vec<crate::models::HfModel>, String> {
+    pub async fn search_huggingface(
+        &self,
+        query: &str,
+        sort: &str,
+        pipeline_tag: Option<&str>,
+    ) -> Result<Vec<crate::models::HfModel>, String> {
         let sort_param = match sort {
             "likes" => "likes",
             "newest" => "lastModified",
+            "trending" => "trendingScore",
             _ => "downloads",
         };
-        let url = format!(
-            "https://huggingface.co/api/models?filter=gguf&search={}&sort={}&direction=-1&limit=20",
+        let mut url = format!(
+            "https://huggingface.co/api/models?filter=gguf&search={}&sort={}&direction=-1&limit=20&full=true",
             query, sort_param
         );
-        let resp = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("HF API error: {}", e))?;
+        if let Some(tag) = pipeline_tag {
+            url.push_str(&format!("&pipeline_tag={}", tag));
+        }
+        let mut req = self.client.get(&url);
+        if let Ok(token) = std::env::var("HF_TOKEN") {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let resp = req.send().await.map_err(|e| {
+            tracing::error!(query = %query, error = %e, "HF API request failed");
+            classify_http_error(&e, &url)
+        })?;
+        let status = resp.status();
         let models: Vec<crate::models::HfModel> = resp
             .json()
             .await
-            .map_err(|e| format!("HF parse error: {}", e))?;
+            .map_err(|e| {
+                tracing::error!(query = %query, status = %status, error = %e, "HF API response parse failed");
+                format!("HF parse error: {}", e)
+            })?;
+        tracing::debug!(query = %query, count = models.len(), "HF search returned models");
         Ok(models)
     }
 
@@ -243,17 +563,45 @@ impl LmsClient {
 
     /// Read the tail of a specific download log.
     pub async fn download_log_content(&self, name: &str) -> Result<String, String> {
-        let safe_name = Self::sanitize(name);
-        let log_file = format!("/tmp/lms-dl-{}.log", safe_name.replace('/', "_"));
-        self.run_cmd(&format!("tail -c 500 {} 2>/dev/null || echo 'No log found'", log_file)).await
+        let log_file = format!("/tmp/lms-dl-{}.log", Self::dl_id(name));
+        self.run_cmd(&format!(
+            "tail -c 500 {} 2>/dev/null || echo 'No log found'",
+            log_file
+        ))
+        .await
     }
 
+    /// Deterministic filename-safe hash for a model name (avoids / vs _ collisions).
+    fn dl_id(name: &str) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    /// Strip any character that is not alphanumeric or one of `/ - _ . : @` from
+    /// user-supplied input before interpolating it into a shell command.
     fn sanitize(input: &str) -> String {
-        input.replace(|c: char| !c.is_alphanumeric() && c != '/' && c != '-' && c != '_' && c != '.' && c != ':' && c != '@', "")
+        input.replace(
+            |c: char| {
+                !c.is_alphanumeric()
+                    && c != '/'
+                    && c != '-'
+                    && c != '_'
+                    && c != '.'
+                    && c != ':'
+                    && c != '@'
+            },
+            "",
+        )
     }
 
     /// Send a chat completion request to the LMS API.
-    pub async fn chat_completion(&self, req: &crate::handlers::ChatRequest) -> Result<(String, u32), String> {
+    pub async fn chat_completion(
+        &self,
+        req: &crate::handlers::ChatRequest,
+    ) -> Result<(String, u32), String> {
         tracing::debug!(model = %req.model, temperature = req.temperature, max_tokens = req.max_tokens, "Sending chat completion request");
         let mut messages = Vec::new();
         if let Some(ref sys) = req.system_prompt {
@@ -281,23 +629,22 @@ impl LmsClient {
             body["presence_penalty"] = serde_json::json!(pp);
         }
 
-        let resp = self.client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
             .json(&body)
             .send()
             .await
             .map_err(|e| {
                 tracing::error!(model = %req.model, error = %e, "Chat completion request failed");
-                format!("Request failed: {}", e)
+                classify_http_error(&e, &url)
             })?;
 
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| {
-                tracing::error!(model = %req.model, error = %e, "Chat completion parse error");
-                format!("Parse error: {}", e)
-            })?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| {
+            tracing::error!(model = %req.model, error = %e, "Chat completion parse error");
+            format!("Parse error: {}", e)
+        })?;
 
         let content = data["choices"][0]["message"]["content"]
             .as_str()
@@ -314,6 +661,11 @@ impl LmsClient {
         Ok((content, tokens))
     }
 
+    /// Execute a shell command either locally (bash, when `LMS_LOCAL=1`) or over
+    /// SSH (with ControlMaster multiplexing), stripping ANSI escapes from output.
+    ///
+    /// Times out after 20 seconds. On non-zero exit with stdout present, returns
+    /// the stdout; otherwise classifies the stderr via [`classify_cli_error`].
     async fn run_cmd(&self, cmd: &str) -> Result<String, String> {
         tracing::debug!(cmd = %cmd, local = self.local_mode, "Executing command");
         let local_mode = self.local_mode;
@@ -324,16 +676,24 @@ impl LmsClient {
                 move || {
                     if local_mode {
                         Command::new("bash")
-                            .args(["-c", &format!("export PATH=\"$HOME/.lmstudio/bin:$PATH\" && {}", cmd)])
+                            .args([
+                                "-c",
+                                &format!("export PATH=\"$HOME/.lmstudio/bin:$PATH\" && {}", cmd),
+                            ])
                             .output()
                     } else {
                         Command::new("ssh")
                             .args([
-                                "-o", "ControlMaster=auto",
-                                "-o", &format!("ControlPath={}", SSH_MUX_PATH),
-                                "-o", "ControlPersist=600",
-                                "-o", "ConnectTimeout=5",
-                                "-o", "ServerAliveInterval=5",
+                                "-o",
+                                "ControlMaster=auto",
+                                "-o",
+                                &format!("ControlPath={}", SSH_MUX_PATH),
+                                "-o",
+                                "ControlPersist=600",
+                                "-o",
+                                "ConnectTimeout=5",
+                                "-o",
+                                "ServerAliveInterval=5",
                                 &ssh_host(),
                                 &format!("export PATH=\"$HOME/.lmstudio/bin:$PATH\" && {}", cmd),
                             ])
@@ -367,7 +727,7 @@ impl LmsClient {
                 Ok(strip_ansi(&stdout))
             } else {
                 tracing::warn!(cmd = %cmd, stderr = %stderr, "Command failed");
-                Err(format!("Command failed: {}", stderr))
+                Err(classify_cli_error(&stderr))
             }
         }
     }

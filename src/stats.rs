@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::VecDeque;
 
 /// Tracks request counts, API calls, downloads, and errors with an event log.
 #[derive(Clone, Serialize)]
@@ -12,7 +13,7 @@ pub struct TrafficStats {
     pub chat_completions: u64,
     pub errors: u64,
     pub started_at: DateTime<Utc>,
-    pub recent_events: Vec<Event>,
+    pub recent_events: VecDeque<Event>,
 }
 
 impl Default for TrafficStats {
@@ -24,7 +25,7 @@ impl Default for TrafficStats {
             chat_completions: 0,
             errors: 0,
             started_at: Utc::now(),
-            recent_events: Vec::new(),
+            recent_events: VecDeque::new(),
         }
     }
 }
@@ -87,14 +88,61 @@ impl TrafficStats {
         (Utc::now() - self.started_at).num_seconds()
     }
 
+    /// Append a timestamped event, evicting the oldest when over 100 entries.
     fn push_event(&mut self, kind: &str, detail: &str) {
-        self.recent_events.push(Event {
+        self.recent_events.push_back(Event {
             timestamp: Utc::now(),
             kind: kind.to_string(),
             detail: detail.to_string(),
         });
         if self.recent_events.len() > 100 {
-            self.recent_events.remove(0);
+            self.recent_events.pop_front();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bench_percentile(samples: &mut [std::time::Duration], pct: f64) -> std::time::Duration {
+        if samples.is_empty() {
+            return std::time::Duration::ZERO;
+        }
+        samples.sort();
+        let idx = ((samples.len() as f64 - 1.0) * pct).round() as usize;
+        samples[idx]
+    }
+
+    #[test]
+    fn bench_stats_push_200_events() {
+        let iterations = 1000;
+        let warmup = iterations / 10;
+        for _ in 0..warmup {
+            let mut s = TrafficStats::default();
+            for i in 0..200 {
+                s.record_api_call(&format!("call_{}", i));
+            }
+        }
+        let mut samples: Vec<std::time::Duration> = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let start = std::time::Instant::now();
+            let mut s = TrafficStats::default();
+            for i in 0..200 {
+                s.record_api_call(&format!("call_{}", i));
+            }
+            samples.push(start.elapsed());
+        }
+        let p50 = bench_percentile(&mut samples.clone(), 0.50);
+        let p95 = bench_percentile(&mut samples.clone(), 0.95);
+        let p99 = bench_percentile(&mut samples.clone(), 0.99);
+        let mean_ns = samples.iter().map(|d| d.as_nanos()).sum::<u128>() / samples.len() as u128;
+        eprintln!(
+            "BENCH\tstats_push_200_events\tp50={}\tp95={}\tp99={}\tmean={}",
+            p50.as_nanos(),
+            p95.as_nanos(),
+            p99.as_nanos(),
+            mean_ns
+        );
     }
 }

@@ -18,8 +18,9 @@
         [title] { position: relative; }
         .info-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: #374151; border: 1px solid #6b7280; color: #d1d5db; font-size: 9px; font-weight: bold; cursor: pointer; flex-shrink: 0; }
         .info-icon:hover { background: #4b5563; border-color: #9ca3af; }
-        .info-icon .info-popup { display: none; position: absolute; bottom: 100%; left: 0; margin-bottom: 6px; width: 300px; padding: 8px; background: #1f2937; border: 1px solid #4b5563; border-radius: 6px; font-size: 11px; color: #d1d5db; z-index: 50; line-height: 1.4; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+        .info-icon .info-popup { display: none; position: absolute; bottom: 100%; left: 0; margin-bottom: 6px; width: max-content; max-width: 500px; padding: 8px; background: #1f2937; border: 1px solid #4b5563; border-radius: 6px; font-size: 11px; color: #d1d5db; z-index: 50; line-height: 1.6; box-shadow: 0 4px 12px rgba(0,0,0,0.4); white-space: nowrap; }
         .info-icon:hover .info-popup { display: block; }
+        .info-popup.active { display: block !important; }
         [data-tip] { position: relative; }
         [data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; width: max-content; max-width: 400px; padding: 6px 10px; background: #1f2937; border: 1px solid #4b5563; border-radius: 6px; font-size: 11px; color: #d1d5db; z-index: 50; line-height: 1.4; box-shadow: 0 4px 12px rgba(0,0,0,0.4); white-space: nowrap; pointer-events: none; }
     </style>
@@ -54,6 +55,18 @@
         <div id="toast-msg" class="rounded-lg px-4 py-3 shadow-lg text-sm border max-w-md"></div>
     </div>
     <script>
+    function toggleInfoPopup(el, event) {
+        event.stopPropagation();
+        const popup = el.querySelector('.info-popup');
+        if (!popup) return;
+        // Close any other open popups
+        document.querySelectorAll('.info-popup.active').forEach(p => { if (p !== popup) p.classList.remove('active'); });
+        popup.classList.toggle('active');
+    }
+    // Close popups when clicking outside
+    document.addEventListener('click', () => {
+        document.querySelectorAll('.info-popup.active').forEach(p => p.classList.remove('active'));
+    });
     function showToast(msg, isError) {
         const t = document.getElementById('toast');
         const m = document.getElementById('toast-msg');

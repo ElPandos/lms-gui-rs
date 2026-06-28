@@ -184,3 +184,58 @@
 - **Root cause**: tracing-appender writes rolling log files (lms-gui-rs.log.*) to the project directory; file watcher detects new/modified file → recompiles → restarts → writes log → loop
 - **Fix**: Add `lms-gui-rs.log*` to .gitignore and watcher ignore (cargo-watch: `-i "lms-gui-rs.log*"`)
 - **Prevention**: When adding file-based logging, always add log patterns to .gitignore and watcher exclusions in the same commit
+
+---
+
+## [serde] Wrong field type in external API struct silently empties results
+
+- **Last seen**: 2026-06-27
+- **Times seen**: 1
+- **Symptom**: HuggingFace model searches returned zero results with no errors in logs after enriching `HfModel`
+- **Root cause**: `gated` typed `Option<String>` per research note ("auto"/"manual"/null), but HF API returns a **boolean**. Serde failed deserializing `false` into `Option<String>`; handler swallowed the error via `.unwrap_or_default()` returning empty vec with no log entry (errors returned as strings, not via `tracing`)
+- **Fix**: Changed `gated: Option<String>` → `gated: bool`; template check `.is_some()` → direct bool; added `tracing::error!` on parse-failure path in lms_client.rs
+- **Prevention**: For serde structs of external APIs, ALWAYS validate field types against an actual API response (`curl` + inspect JSON) — research notes about "possible values" are not ground truth. Error-returning methods that callers swallow with `.unwrap_or_default()` must `tracing::error!` the error BEFORE returning, or failures go completely silent
+
+---
+
+## [lms] Parallel slots divide context window — agents get "n_ctx too small"
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Zed/IDE sends ~80K-token prompt, LM Studio errors with `n_keep (80079) >= n_ctx (40960)` even though `lms ps` shows `CONTEXT: 131072`
+- **Root cause**: LMS default `--parallel 4` divides the loaded context across slots for continuous batching. With VRAM guardrails, per-slot context drops well below the loaded value (131072 loaded → ~40960 effective per slot). The OpenAI-compatible `/v1/models` endpoint reports `max_context_length: null`, hiding this from clients
+- **Fix**: Load with `--parallel 1` for full per-request context (`lms load <model> --context-length 131072 --parallel 1`). Added a Parallel setting to the GUI (defaults to 4, set to 1 for agent/IDE use)
+- **Prevention**: When loading models for IDE/agent use (large system prompts), always set `--parallel 1`. The `/v1/models` endpoint never reports loaded context — query `/api/v0/models` for `loaded_context_length` instead
+
+---
+
+## [regex] Specific patterns must precede generic in alternation order
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: `HfModel::param_count("12x4B")` returns `4.0` instead of `48.0`
+- **Root cause**: Regex `(\d+\.?\d*)[bB]` matches "4B" before the MoE pattern `(\d+)x(\d+\.?\d*)[bB]` runs — Rust `regex` crate uses leftmost match, and the generic pattern matches a substring of the MoE form
+- **Fix**: Order alternations from most-specific to least-specific, or anchor MoE pattern so it wins for "12x4B"
+- **Prevention**: When combining regex alternations, always test compound forms (MoE, scientific notation) first. Add a test case for every compound form. Treat "first match wins" as a footgun, not a feature
+
+---
+
+## [testing] Characterization tests must assert CURRENT (buggy) behavior
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Temptation to write `assert_eq!(param_count("12x4B"), 48.0)` (correct value) when writing the safety-net test
+- **Root cause**: Characterization tests pin behavior so a refactor can be verified as behavior-preserving. Asserting the *desired* value breaks the safety net — a later behavior-preserving change would appear to fail, and a real regression to a *different* buggy value could pass unnoticed
+- **Fix**: Assert `4.0` (current buggy output) with a `// KNOWN BUG: should be 48.0, see follow-up tech debt` comment linking the issue
+- **Prevention**: Before writing any characterization test, run the code under test and assert whatever it currently returns. Track locked-in bugs in a "Follow-up Tech Debt" section of the plan, never "fix" them in the test assertion
+
+---
+
+## [process] Behavior-preserving refactors must not fix bugs discovered along the way
+
+- **Last seen**: 2026-06-28
+- **Times seen**: 1
+- **Symptom**: Discovered the `param_count("12x4B")` regex bug mid-refactor and wanted to fix it "while we're here"
+- **Root cause**: Fixing a bug during a behavior-preserving refactor invalidates the safety net (characterization test now asserts old behavior the refactor changed), expands scope, and makes the diff unreviewable for behavior preservation — reviewers can't tell which changes are refactor vs. fix
+- **Fix**: Note the bug in "Follow-up Tech Debt" section of the plan, leave it unfixed, ensure the characterization test pins the buggy behavior
+- **Prevention**: Define "behavior-preserving" upfront as "characterization tests pass unchanged." Any discovered bug goes to a separate follow-up ticket with its own test+fix PR, never bundled into the refactor

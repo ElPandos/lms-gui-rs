@@ -1,16 +1,16 @@
 //! LMS GUI — Web dashboard for managing LM Studio models.
 //!
-//! Provides a web interface at `http://0.0.0.0:3000` for:
+//! Provides a web interface at `http://0.0.0.0:<LMS_PORT, default 3000>` for:
 //! - Viewing and managing loaded models
 //! - Searching and downloading models from LM Studio Hub
 //! - Monitoring runtime status and host hardware
 //! - Tracking traffic statistics
 
+mod db;
 mod handlers;
 mod lms_client;
 mod models;
 mod stats;
-mod db;
 
 use axum::{routing::get, routing::post, Router};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_writer(non_blocking.and(std::io::stdout))
         .with_target(true)
@@ -45,9 +45,18 @@ async fn main() {
     let base_url = if local_mode {
         "http://localhost:8010".to_string()
     } else {
-        format!("http://{}:8010", std::env::var("ENV_IP_JUMP_155_HOST").expect("ENV_IP_JUMP_155_HOST must be set"))
+        format!(
+            "http://{}:8010",
+            std::env::var("ENV_IP_JUMP_155_HOST").expect("ENV_IP_JUMP_155_HOST must be set")
+        )
     };
 
+    let port: u16 = std::env::var("LMS_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3000);
+
+    tracing::info!(port, "Using port from LMS_PORT env (default 3000)");
     tracing::info!(mode = if local_mode { "local" } else { "remote" }, base_url = %base_url, "Starting LMS GUI");
 
     let state = AppState {
@@ -58,12 +67,18 @@ async fn main() {
 
     tracing::info!("Database initialized successfully");
 
+    // Reap any orphaned download processes from a previous run
+    if let Err(e) = state.lms.reap_orphaned_downloads().await {
+        tracing::warn!(error = %e, "Failed to reap orphaned downloads at startup");
+    }
+
     let app = Router::new()
         .route("/", get(handlers::dashboard))
         .route("/models", get(handlers::list_models))
         .route("/models/download", post(handlers::download_model))
         .route("/models/download/status", get(handlers::download_status))
         .route("/models/load", post(handlers::load_model))
+        .route("/models/download/cancel", post(handlers::cancel_download))
         .route("/models/load/status", get(handlers::load_status))
         .route("/models/unload", post(handlers::unload_model))
         .route("/models/delete", post(handlers::delete_model))
@@ -79,9 +94,11 @@ async fn main() {
         .route("/changelog", get(handlers::changelog))
         .route("/api/models", get(handlers::api_models))
         .route("/api/models/loaded", get(handlers::api_loaded_models))
+        .route("/api/v0/models", get(handlers::api_v0_models))
         .route("/api/stats", get(handlers::api_stats))
         .route("/api/stats/reset", post(handlers::api_stats_reset))
         .route("/api/mode", get(handlers::api_mode))
+        .route("/api/health", get(handlers::api_health))
         .route("/api/settings", get(handlers::api_get_settings))
         .route("/api/settings", post(handlers::api_set_setting))
         .route("/api/chat/history", get(handlers::api_chat_history))
@@ -94,8 +111,14 @@ async fn main() {
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await
-        .expect("Failed to bind to 0.0.0.0:3000 — is the port already in use?");
-    tracing::info!("Listening on http://0.0.0.0:3000");
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "Failed to bind to 0.0.0.0:{} — is the port already in use?",
+                port
+            )
+        });
+    tracing::info!("Listening on http://0.0.0.0:{}", port);
     axum::serve(listener, app).await.expect("Server error");
 }

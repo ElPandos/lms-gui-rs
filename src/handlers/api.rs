@@ -1,3 +1,5 @@
+//! JSON API endpoints — settings, chat history, test results, stats, export/import.
+
 use axum::extract::State;
 use axum::Json;
 
@@ -6,13 +8,20 @@ use crate::stats::TrafficStats;
 use crate::AppState;
 
 // JSON API endpoints
-/// JSON API: list all models from LMS.
+/// JSON API: list all models from LMS, enriched with `max_context_length` from
+/// the v0 internal API (the OpenAI-compatible `/v1/models` returns null for it).
 pub async fn api_models(State(state): State<AppState>) -> Json<Vec<Model>> {
     tracing::debug!("API: list models");
     let mut s = state.stats.write().await;
     s.record_api_call("api_models");
     drop(s);
-    Json(state.lms.list_models().await.unwrap_or_default())
+    Json(
+        state
+            .lms
+            .list_models_with_context()
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 /// JSON API: currently loaded models.
@@ -25,6 +34,23 @@ pub async fn api_loaded_models(State(state): State<AppState>) -> Json<serde_json
     Json(serde_json::json!({ "output": output }))
 }
 
+/// JSON API: raw v0 models from LM Studio's internal endpoint, including
+/// `max_context_length` and `loaded_context_length`. Proxied through the
+/// dashboard because the browser cannot reach the LMS server directly (CORS).
+pub async fn api_v0_models(State(state): State<AppState>) -> Json<serde_json::Value> {
+    tracing::debug!("API: v0 models (proxy)");
+    let mut s = state.stats.write().await;
+    s.record_api_call("api_v0_models");
+    drop(s);
+    match state.lms.fetch_v0_models().await {
+        Ok(models) => Json(serde_json::json!({ "data": models })),
+        Err(e) => {
+            tracing::error!(error = %e, "v0 models proxy failed");
+            Json(serde_json::json!({ "error": e }))
+        }
+    }
+}
+
 /// JSON API: traffic statistics.
 pub async fn api_stats(State(state): State<AppState>) -> Json<TrafficStats> {
     let stats = state.stats.read().await.clone();
@@ -34,6 +60,18 @@ pub async fn api_stats(State(state): State<AppState>) -> Json<TrafficStats> {
 /// JSON API: whether running in local mode.
 pub async fn api_mode(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "local": state.lms.local_mode }))
+}
+
+/// JSON API: health check for LMS API and CLI reachability.
+pub async fn api_health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let (api_ok, cli_ok, api_err, cli_err) = state.lms.health_check().await;
+    Json(serde_json::json!({
+        "api_reachable": api_ok,
+        "cli_reachable": cli_ok,
+        "api_error": api_err,
+        "cli_error": cli_err,
+        "base_url": state.lms.base_url,
+    }))
 }
 
 /// JSON API: get all persisted settings.
@@ -50,13 +88,22 @@ pub struct SettingRequest {
 }
 
 /// JSON API: save a key-value setting.
-pub async fn api_set_setting(State(state): State<AppState>, Json(req): Json<SettingRequest>) -> Json<CommandResult> {
+pub async fn api_set_setting(
+    State(state): State<AppState>,
+    Json(req): Json<SettingRequest>,
+) -> Json<CommandResult> {
     tracing::debug!(key = %req.key, "API: save setting");
     match state.db.set_setting(&req.key, &req.value) {
-        Ok(()) => Json(CommandResult { success: true, message: "Saved".to_string() }),
+        Ok(()) => Json(CommandResult {
+            success: true,
+            message: "Saved".to_string(),
+        }),
         Err(e) => {
             tracing::error!(key = %req.key, error = %e, "Failed to save setting");
-            Json(CommandResult { success: false, message: e })
+            Json(CommandResult {
+                success: false,
+                message: e,
+            })
         }
     }
 }
@@ -79,13 +126,30 @@ pub struct ChatSaveRequest {
 }
 
 /// JSON API: persist a chat message.
-pub async fn api_chat_save(State(state): State<AppState>, Json(req): Json<ChatSaveRequest>) -> Json<CommandResult> {
+pub async fn api_chat_save(
+    State(state): State<AppState>,
+    Json(req): Json<ChatSaveRequest>,
+) -> Json<CommandResult> {
     tracing::debug!(role = %req.role, model = %req.model, "API: save chat message");
-    match state.db.save_chat_message(&req.role, &req.model, &req.content, req.settings_json.as_deref(), req.response_json.as_deref(), req.duration_ms, req.tokens) {
-        Ok(_) => Json(CommandResult { success: true, message: "Saved".to_string() }),
+    match state.db.save_chat_message(&crate::db::ChatMessage {
+        role: &req.role,
+        model: &req.model,
+        content: &req.content,
+        settings_json: req.settings_json.as_deref(),
+        response_json: req.response_json.as_deref(),
+        duration_ms: req.duration_ms,
+        tokens: req.tokens,
+    }) {
+        Ok(_) => Json(CommandResult {
+            success: true,
+            message: "Saved".to_string(),
+        }),
         Err(e) => {
             tracing::error!(error = %e, "Failed to save chat message");
-            Json(CommandResult { success: false, message: e })
+            Json(CommandResult {
+                success: false,
+                message: e,
+            })
         }
     }
 }
@@ -94,10 +158,16 @@ pub async fn api_chat_save(State(state): State<AppState>, Json(req): Json<ChatSa
 pub async fn api_chat_clear(State(state): State<AppState>) -> Json<CommandResult> {
     tracing::info!("API: clear chat history");
     match state.db.clear_chat_history() {
-        Ok(()) => Json(CommandResult { success: true, message: "Cleared".to_string() }),
+        Ok(()) => Json(CommandResult {
+            success: true,
+            message: "Cleared".to_string(),
+        }),
         Err(e) => {
             tracing::error!(error = %e, "Failed to clear chat history");
-            Json(CommandResult { success: false, message: e })
+            Json(CommandResult {
+                success: false,
+                message: e,
+            })
         }
     }
 }
@@ -115,13 +185,30 @@ pub struct TestSaveRequest {
 }
 
 /// JSON API: save a speed test result.
-pub async fn api_test_save(State(state): State<AppState>, Json(req): Json<TestSaveRequest>) -> Json<CommandResult> {
+pub async fn api_test_save(
+    State(state): State<AppState>,
+    Json(req): Json<TestSaveRequest>,
+) -> Json<CommandResult> {
     tracing::debug!(test_type = %req.test_type, model = %req.model, "API: save test result");
-    match state.db.save_test_result(&req.test_type, &req.model, req.num_calls, req.max_tokens, req.sigma, &req.results_json, &req.stats_json) {
-        Ok(_) => Json(CommandResult { success: true, message: "Saved".to_string() }),
+    match state.db.save_test_result(
+        &req.test_type,
+        &req.model,
+        req.num_calls,
+        req.max_tokens,
+        req.sigma,
+        &req.results_json,
+        &req.stats_json,
+    ) {
+        Ok(_) => Json(CommandResult {
+            success: true,
+            message: "Saved".to_string(),
+        }),
         Err(e) => {
             tracing::error!(error = %e, "Failed to save test result");
-            Json(CommandResult { success: false, message: e })
+            Json(CommandResult {
+                success: false,
+                message: e,
+            })
         }
     }
 }
@@ -136,7 +223,10 @@ pub async fn api_stats_reset(State(state): State<AppState>) -> Json<CommandResul
     tracing::info!("API: resetting traffic stats");
     let mut s = state.stats.write().await;
     s.reset();
-    Json(CommandResult { success: true, message: "Stats reset".to_string() })
+    Json(CommandResult {
+        success: true,
+        message: "Stats reset".to_string(),
+    })
 }
 
 /// JSON API: export all database data.
@@ -146,13 +236,22 @@ pub async fn api_export(State(state): State<AppState>) -> Json<serde_json::Value
 }
 
 /// JSON API: import data from a previous export.
-pub async fn api_import(State(state): State<AppState>, Json(data): Json<serde_json::Value>) -> Json<CommandResult> {
+pub async fn api_import(
+    State(state): State<AppState>,
+    Json(data): Json<serde_json::Value>,
+) -> Json<CommandResult> {
     tracing::info!("API: importing data");
     match state.db.import_all(&data) {
-        Ok(()) => Json(CommandResult { success: true, message: "Imported".to_string() }),
+        Ok(()) => Json(CommandResult {
+            success: true,
+            message: "Imported".to_string(),
+        }),
         Err(e) => {
             tracing::error!(error = %e, "Data import failed");
-            Json(CommandResult { success: false, message: e })
+            Json(CommandResult {
+                success: false,
+                message: e,
+            })
         }
     }
 }

@@ -5,34 +5,103 @@
     <!-- Search -->
     <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
         <h2 class="text-sm font-semibold text-yellow-400 uppercase tracking-wide mb-3">Search Models to Download</h2>
-        <!-- Source tabs -->
-        <div class="flex items-center gap-2 mb-3">
-            <a href="/models?q={{ query }}&source=lms" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "lms" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">LM Studio</a>
-            <a href="/models?q={{ query }}&source=hf" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "hf" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">HuggingFace</a>
-            {% if search_source == "hf" %}
-            <select onchange="window.location.href='/models?q={{ query }}&source=hf&sort='+this.value"
-                class="ml-2 text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
-                <option value="downloads" {% if search_sort == "downloads" %}selected{% endif %}>Most Downloaded</option>
-                <option value="likes" {% if search_sort == "likes" %}selected{% endif %}>Most Liked</option>
-                <option value="newest" {% if search_sort == "newest" %}selected{% endif %}>Newest</option>
-            </select>
+        <!-- Source tabs + filters -->
+        <div class="flex items-end gap-3 mb-3 flex-wrap">
+            <!-- Left: source tabs -->
+            <div class="flex items-center gap-2">
+                <button onclick="switchSource('lms')" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "lms" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">LM Studio</button>
+                <button onclick="switchSource('hf')" class="text-xs px-3 py-1.5 rounded transition {% if search_source == "hf" %}bg-yellow-700 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300{% endif %}">HuggingFace</button>
+            </div>
+            <!-- Right: all dropdown filters, labels above -->
+            {% if search_source == "lms" %}
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400 ml-auto">
+                <span>Format</span>
+                <select onchange="window.location.href='/models?q={{ query }}&source=lms&format='+this.value"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="" {% if search_format.is_empty() %}selected{% endif %}>All</option>
+                    <option value="gguf" {% if search_format == "gguf" %}selected{% endif %}>GGUF</option>
+                    <option value="mlx" {% if search_format == "mlx" %}selected{% endif %}>MLX</option>
+                </select>
+            </label>
             {% endif %}
-            <select id="max-params-filter" onchange="filterByParams()"
-                class="ml-auto text-xs bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200"
-                data-tip="Filter by max parameter count (approximate VRAM usage)">
-                <option value="0">All sizes</option>
-                <option value="3">≤3B (~2-3 GB)</option>
-                <option value="7">≤7B (~4-7 GB)</option>
-                <option value="8">≤8B (~5-8 GB)</option>
-                <option value="13">≤13B (~8-13 GB)</option>
-                <option value="14">≤14B (~9-14 GB)</option>
-                <option value="27">≤27B (~15-22 GB)</option>
-                <option value="35">≤35B (~20-28 GB)</option>
-                <option value="70">≤70B (~35-55 GB)</option>
-            </select>
+            {% if search_source == "hf" %}
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400 ml-auto">
+                <span>Sort</span>
+                <select onchange="window.location.href='/models?q={{ query }}&source=hf&sort='+this.value"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="downloads" {% if search_sort == "downloads" %}selected{% endif %}>Most Downloaded</option>
+                    <option value="likes" {% if search_sort == "likes" %}selected{% endif %}>Most Liked</option>
+                    <option value="newest" {% if search_sort == "newest" %}selected{% endif %}>Newest</option>
+                    <option value="trending" {% if search_sort == "trending" %}selected{% endif %}>Trending</option>
+                </select>
+            </label>
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400">
+                <span>Type</span>
+                <select onchange="window.location.href='/models?q={{ query }}&source=hf&sort={{ search_sort }}&pipeline_tag='+this.value"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="" {% if search_pipeline.is_empty() %}selected{% endif %}>All</option>
+                    <option value="text-generation" {% if search_pipeline == "text-generation" %}selected{% endif %}>Text Generation</option>
+                    <option value="image-text-to-text" {% if search_pipeline == "image-text-to-text" %}selected{% endif %}>Vision</option>
+                    <option value="text2text-generation" {% if search_pipeline == "text2text-generation" %}selected{% endif %}>Text2Text</option>
+                </select>
+            </label>
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by license (populated from results)">
+                <span>License</span>
+                <select id="license-filter" onchange="filterByLicense()"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="">All</option>
+                </select>
+            </label>
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by quantization (populated from results)">
+                <span>Quant</span>
+                <select id="quant-filter" onchange="filterByQuant()"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="">All</option>
+                </select>
+            </label>
+            {% endif %}
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Filter by max parameter count (approximate VRAM usage)">
+                <span>Size</span>
+                <select id="max-params-filter" onchange="filterByParams()"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="0">All</option>
+                    <option value="3">≤3B (~2-3 GB)</option>
+                    <option value="7">≤7B (~4-7 GB)</option>
+                    <option value="8">≤8B (~5-8 GB)</option>
+                    <option value="13">≤13B (~8-13 GB)</option>
+                    <option value="14">≤14B (~9-14 GB)</option>
+                    <option value="27">≤27B (~15-22 GB)</option>
+                    <option value="35">≤35B (~20-28 GB)</option>
+                    <option value="70">≤70B (~35-55 GB)</option>
+                </select>
+            </label>
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Context window size used when loading models (capped at model max)">
+                <span>Context</span>
+                <select id="default-context-length" onchange="saveModelsSettings()"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="4096">4096</option>
+                    <option value="8192">8192</option>
+                    <option value="16384">16384</option>
+                    <option value="32768" selected>32768</option>
+                    <option value="65536">65536</option>
+                    <option value="131072">131072</option>
+                </select>
+            </label>
+            <label class="flex flex-col gap-0.5 text-xs text-gray-400" data-tip="Parallel request slots via continuous batching. Context is divided across slots — use 1 for agents/IDEs that need full context, higher for concurrent chat throughput.">
+                <span>Parallel</span>
+                <select id="default-parallel" onchange="saveModelsSettings()"
+                    class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200">
+                    <option value="1">1 (full ctx)</option>
+                    <option value="2">2</option>
+                    <option value="4" selected>4 (default)</option>
+                    <option value="8">8</option>
+                </select>
+            </label>
         </div>
         <form method="get" action="/models" class="flex gap-3" onsubmit="showSearchSpinner()">
             <input type="hidden" name="source" value="{{ search_source }}">
+            {% if !search_format.is_empty() %}<input type="hidden" name="format" value="{{ search_format }}">{% endif %}
+            {% if !search_pipeline.is_empty() %}<input type="hidden" name="pipeline_tag" value="{{ search_pipeline }}">{% endif %}
             <input type="text" name="q" value="{{ query }}" placeholder="e.g. llama, qwen, gemma, mistral"
                 data-tip="Enter a model name or keyword to search"
                 class="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
@@ -45,18 +114,19 @@
         <div class="mt-2 space-y-2">
             {% for result in search_results %}
             <div class="bg-gray-900 rounded px-4 py-3 border border-gray-700" id="dl-card-{{ loop.index }}">
-                <div class="flex items-center justify-between">
-                    <div class="min-w-0 flex-1">
-                        <p class="text-sm font-mono text-gray-100 truncate">{{ result.name }}</p>
-                        {% if !result.description.is_empty() %}
-                        <p class="text-xs text-gray-400 mt-0.5 truncate">{{ result.description }}</p>
-                        {% endif %}
-                        <span class="dl-info text-xs text-gray-400 hidden"></span>
-                    </div>
+                <!-- Row 1: model name + Get button -->
+                <div class="flex items-center justify-between gap-2">
+                    <p class="text-sm font-mono text-gray-100 truncate min-w-0">{{ result.name }}</p>
                     <button onclick="startDownload('{{ result.name }}', this)"
                         data-tip="Download {{ result.name }}"
                         class="ml-3 shrink-0 text-xs bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded transition">⬇ Get</button>
                 </div>
+                <!-- Row 2: description -->
+                {% if !result.description.is_empty() %}
+                <p class="text-xs text-gray-400 mt-1.5 truncate">{{ result.description }}</p>
+                {% endif %}
+                <!-- Row 3: download info placeholder -->
+                <span class="dl-info text-xs text-gray-400 hidden"></span>
                 <div class="dl-progress mt-2 hidden">
                     <div class="w-full bg-gray-700 rounded-full h-1.5">
                         <div class="dl-bar bg-blue-500 h-1.5 rounded-full transition-all" style="width: 0%"></div>
@@ -72,14 +142,30 @@
         <div class="mt-2 space-y-2">
             {% for model in hf_results %}
             <div class="bg-gray-900 rounded px-4 py-3 border border-gray-700" id="hf-card-{{ loop.index }}">
-                <div class="flex items-center justify-between">
-                    <div class="min-w-0 flex-1">
+                <!-- Row 1: model id + badges + Get button -->
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 flex-wrap min-w-0">
                         <p class="text-sm font-mono text-gray-100 truncate">{{ model.model_id }}</p>
-                        <p class="text-xs text-gray-500 mt-0.5">⬇ {{ model.downloads }} · ♥ {{ model.likes }}</p>
+                        {% if let Some(pt) = model.pipeline_tag %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-700/30 text-blue-400">{{ pt }}</span>{% endif %}
+                        {% if model.gated %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-700/30 text-red-400">⚠ Gated</span>{% endif %}
                     </div>
                     <button onclick="startDownload('https://huggingface.co/{{ model.model_id }}', this)"
                         data-tip="Download {{ model.model_id }}"
                         class="ml-3 shrink-0 text-xs bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded transition">⬇ Get</button>
+                </div>
+                <!-- Row 2: license + separate quantization badges with tooltips -->
+                <div class="flex items-center gap-1.5 flex-wrap mt-1.5">
+                    {% if let Some(lic) = model.license() %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-green-700/30 text-green-400">{{ lic }}</span>{% endif %}
+                    {% let quants = model.quantizations() %}                    {% let recommended = model.recommended_quant(gpu_vram_gb) %}
+                    {% for q in quants %}
+                    {% let is_recommended = recommended.as_deref() == Some(q.as_str()) %}
+                    <span class="text-[10px] px-1.5 py-0.5 rounded cursor-default {% if is_recommended %}bg-yellow-700/40 text-yellow-300 border border-yellow-600/50{% else %}bg-purple-700/30 text-purple-400{% endif %}" data-tip="{{ model.quant_desc(q) }}{% if is_recommended %} ★ Recommended for {{ gpu_vram_gb }}GB VRAM{% endif %}">{{ q }}{% if is_recommended %} ★{% endif %}</span>
+                    {% endfor %}
+                </div>
+                <!-- Row 3: stats + date -->
+                <div class="flex items-center gap-3 mt-1.5">
+                    <span class="text-xs text-gray-500">⬇ {{ model.downloads }} · ♥ {{ model.likes }}</span>
+                    {% if let Some(lm) = model.last_modified %}<span class="text-[10px] text-gray-600">🕒 {{ lm|truncate(10) }}</span>{% endif %}
                 </div>
             </div>
             {% endfor %}
@@ -125,6 +211,9 @@
                         <th class="text-left py-2 px-3">Params</th>
                         <th class="text-left py-2 px-3">Arch</th>
                         <th class="text-left py-2 px-3">Size</th>
+                        <th class="text-left py-2 px-3">Context</th>
+                        <th class="text-left py-2 px-3">Quant</th>
+                        <th class="text-left py-2 px-3">Publisher</th>
                         <th class="text-left py-2 px-3">Status</th>
                         <th class="text-right py-2 px-3">Action</th>
                     </tr>
@@ -137,6 +226,9 @@
                         <td class="py-2 px-3 text-xs text-gray-300">{{ m.params }}</td>
                         <td class="py-2 px-3 text-xs text-gray-300">{{ m.arch }}</td>
                         <td class="py-2 px-3 text-xs text-gray-300">{{ m.size }}</td>
+                        <td class="py-2 px-3 text-xs text-gray-300">{% if !m.max_context.is_empty() %}{{ m.max_context }}{% else %}<span class="text-gray-600">—</span>{% endif %}</td>
+                        <td class="py-2 px-3 text-xs text-gray-300">{% if !m.quantization.is_empty() %}{{ m.quantization }}{% else %}<span class="text-gray-600">—</span>{% endif %}</td>
+                        <td class="py-2 px-3 text-xs text-gray-300">{% if !m.publisher.is_empty() %}{{ m.publisher }}{% else %}<span class="text-gray-600">—</span>{% endif %}</td>
                         <td class="py-2 px-3 text-xs {% if m.status.contains("LOADED") %}text-green-400{% else %}text-gray-400{% endif %}">{{ m.status }}</td>
                         <td class="py-2 px-3 text-right">
                             <button onclick="deleteModel('{{ m.name }}', this)"
@@ -158,32 +250,10 @@ function showSearchSpinner() {
     btn.innerHTML = '<span class="spinner"></span> Searching...';
 }
 
-// Restore last search if returning to models page without a query
-(async function() {
-    const url = new URL(location.href);
-    if (url.searchParams.has('q')) {
-        const q = url.searchParams.get('q');
-        const source = url.searchParams.get('source') || 'lms';
-        if (q) {
-            // Page has a query — save it for restoration later
-            fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'models_last_search', value: JSON.stringify({ q, source }) }) });
-        } else {
-            // Empty query — clear saved
-            fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ key: 'models_last_search', value: '' }) });
-        }
-        return;
-    }
-    // No query param — try to restore
-    try {
-        const resp = await fetch('/api/settings');
-        const data = await resp.json();
-        const entry = data.find(([k]) => k === 'models_last_search');
-        if (entry && entry[1]) {
-            const { q, source } = JSON.parse(entry[1]);
-            if (q) location.replace(`/models?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source || 'lms')}`);
-        }
-    } catch(e) {}
-})();
+// Switch provider tab without searching — just updates the hidden source field and reloads the page with no query
+function switchSource(source) {
+    window.location.href = '/models?source=' + source;
+}
 
 // Extract parameter count from model name (e.g. "7b", "13B", "70b")
 function extractParams(name) {
@@ -218,7 +288,100 @@ function filterByParams() {
     });
 }
 
-// On load: add size estimates to cards
+// License filter (HF only, client-side, populated from visible results)
+function getCardLicense(card) {
+    // License badge is the green one in row 2
+    const badge = card.querySelector('.bg-green-700\\/30');
+    return badge ? badge.textContent.trim() : '';
+}
+
+function populateLicenseFilter() {
+    const select = document.getElementById('license-filter');
+    if (!select) return;
+    const licenses = new Set();
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        const lic = getCardLicense(card);
+        if (lic) licenses.add(lic);
+    });
+    const current = select.value;
+    select.innerHTML = '<option value="">All</option>';
+    [...licenses].sort().forEach(lic => {
+        const opt = document.createElement('option');
+        opt.value = lic;
+        opt.textContent = lic;
+        select.appendChild(opt);
+    });
+    if (current && [...select.options].some(o => o.value === current)) {
+        select.value = current;
+    }
+}
+
+function filterByLicense() {
+    const filter = document.getElementById('license-filter')?.value || '';
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        if (!filter || getCardLicense(card) === filter) {
+            // Respect existing params filter too
+            const max = parseInt(document.getElementById('max-params-filter')?.value || '0');
+            if (max === 0) { card.style.display = ''; return; }
+            const name = card.querySelector('.font-mono')?.textContent?.trim() || '';
+            const params = extractParams(name);
+            card.style.display = (params === 0 || params <= max) ? '' : 'none';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
+// Quantization filter (HF only, client-side, populated from visible results)
+function getCardQuants(card) {
+    // Collect all quant badges (purple or yellow/recommended) in row 2
+    const badges = card.querySelectorAll('[id^=hf-card] span.bg-purple-700\\/30, [id^=hf-card] span.bg-yellow-700\\/40');
+    // Simpler: get all badges that contain quant patterns (Q4_K_M, F16, etc.)
+    const quants = [];
+    card.querySelectorAll('.bg-purple-700\\/30, .bg-yellow-700\\/40').forEach(b => {
+        const text = b.textContent.trim().replace(' ★', '');
+        if (text.match(/^[QIFB]\d/i)) quants.push(text);
+    });
+    return quants;
+}
+
+function populateQuantFilter() {
+    const select = document.getElementById('quant-filter');
+    if (!select) return;
+    const quants = new Set();
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        getCardQuants(card).forEach(q => quants.add(q));
+    });
+    const current = select.value;
+    select.innerHTML = '<option value="">All</option>';
+    [...quants].sort().forEach(q => {
+        const opt = document.createElement('option');
+        opt.value = q;
+        opt.textContent = q;
+        select.appendChild(opt);
+    });
+    if (current && [...select.options].some(o => o.value === current)) {
+        select.value = current;
+    }
+}
+
+function filterByQuant() {
+    const filter = document.getElementById('quant-filter')?.value || '';
+    document.querySelectorAll('[id^=hf-card]').forEach(card => {
+        const cardQuants = getCardQuants(card);
+        if (!filter || cardQuants.includes(filter)) {
+            const max = parseInt(document.getElementById('max-params-filter')?.value || '0');
+            if (max === 0) { card.style.display = ''; return; }
+            const name = card.querySelector('.font-mono')?.textContent?.trim() || '';
+            const params = extractParams(name);
+            card.style.display = (params === 0 || params <= max) ? '' : 'none';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
+// On load: add size estimates to cards + populate license filter
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[id^=dl-card], [id^=hf-card]').forEach(card => {
         const nameEl = card.querySelector('.font-mono');
@@ -229,6 +392,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 ` <span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-sans">${params}B ${estimateSize(params)}</span>`);
         }
     });
+    populateLicenseFilter();
+    populateQuantFilter();
 });
 
 async function deleteModel(name, btn) {
@@ -303,7 +468,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function cancelActiveDownload(name, btn) {
     removeDownloadActive(name);
-    fetch(`/models/download/status?q=${encodeURIComponent(name)}&clear=1`);
+    fetch('/models/download/cancel', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model_name: name}) });
     const card = btn.closest('[id^=active-dl]');
     if (card) card.remove();
     const section = document.getElementById('active-downloads-section');
@@ -316,7 +481,17 @@ function cancelActiveDownload(name, btn) {
 function pollActiveDownload(name, card) {
     const barEl = card.querySelector('.dl-bar');
     const info = card.querySelector('.dl-info');
+    let pollCount = 0;
+    let noLogCount = 0;
     const interval = setInterval(async () => {
+        pollCount++;
+        if (pollCount > 60) {
+            clearInterval(interval);
+            info.textContent = 'Stalled (no progress for 3 min)';
+            info.classList.add('text-red-400');
+            showToast('Download stalled: ' + name, true);
+            return;
+        }
         try {
             const resp = await fetch(`/models/download/status?q=${encodeURIComponent(name)}`);
             const data = await resp.json();
@@ -373,10 +548,29 @@ function pollActiveDownload(name, card) {
                 if (etaMatch) details.push(`ETA ${etaMatch[1]}`);
                 info.textContent = details.join(' · ');
             }
-            if (msg.includes('no log') || msg.includes('failed')) {
+            if (msg.includes('no log')) {
+                // Log file may not exist yet (startup race) — retry for up to 10 ticks before giving up
+                noLogCount = (noLogCount || 0) + 1;
+                if (noLogCount >= 10) {
+                    clearInterval(interval);
+                    removeDownloadActive(name);
+                    info.textContent = 'Download failed to start';
+                    info.classList.add('text-red-400');
+                    card.querySelector('.dl-bar')?.classList.replace('bg-blue-500', 'bg-red-500');
+                    showToast('Download failed to start: ' + name, true);
+                    setTimeout(() => { card.remove(); /* refresh local disk in case partial */ refreshLocalDisk(); }, 5000);
+                }
+                return;  // don't process further on this tick
+            }
+            if (msg.includes('failed')) {
                 clearInterval(interval);
                 removeDownloadActive(name);
-                card.remove();
+                info.textContent = 'Download failed';
+                info.classList.add('text-red-400');
+                card.querySelector('.dl-bar')?.classList.replace('bg-blue-500', 'bg-red-500');
+                showToast('Download failed: ' + name, true);
+                setTimeout(() => { card.remove(); refreshLocalDisk(); }, 5000);
+                return;
             }
         } catch (e) { clearInterval(interval); }
     }, 3000);
@@ -463,7 +657,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Settings persistence
-const MODELS_SETTING_IDS = ['max-params-filter', 'disk-refresh-interval'];
+const MODELS_SETTING_IDS = ['max-params-filter', 'disk-refresh-interval', 'default-context-length', 'default-parallel'];
 function saveModelsSettings() {
     const settings = {};
     MODELS_SETTING_IDS.forEach(id => { const el = document.getElementById(id); if (el) settings[id] = el.value; });

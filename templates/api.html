@@ -22,10 +22,34 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/v1/models</td><td class="py-2 px-3 text-gray-400">List available models</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/v1/models</td><td class="py-2 px-3 text-gray-400">List available models (no context metadata)</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/chat/completions</td><td class="py-2 px-3 text-gray-400">Chat with a model (OpenAI compatible)</td><td class="py-2 px-3"></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/completions</td><td class="py-2 px-3 text-gray-400">Text completion</td><td class="py-2 px-3"></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/v1/embeddings</td><td class="py-2 px-3 text-gray-400">Generate embeddings</td><td class="py-2 px-3"></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- LMS Internal v0 API -->
+    <div class="bg-gray-800 rounded-lg p-5 border border-gray-700">
+        <div class="flex items-center gap-2 mb-2">
+            <h2 class="text-sm font-semibold text-purple-400 uppercase tracking-wide">LM Studio Internal (v0)</h2>
+            <span class="text-[10px] text-gray-500 border border-gray-600 rounded px-1.5 py-0.5">undocumented · subject to change</span>
+        </div>
+        <p class="text-xs text-gray-500 mb-4">Not OpenAI-compatible. Returns rich metadata (context length, loaded state, quantization) that <span class="font-mono text-gray-400">/v1/models</span> omits. <span class="text-yellow-400">/api/models</span> merges these for you.</p>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700 text-xs uppercase">
+                        <th class="text-left py-2 px-3">Method</th>
+                        <th class="text-left py-2 px-3">Endpoint</th>
+                        <th class="text-left py-2 px-3">Description</th>
+                        <th class="text-right py-2 px-3"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/v0/models</td><td class="py-2 px-3 text-gray-400">Models with <span class="font-mono text-gray-300">max_context_length</span> &amp; <span class="font-mono text-gray-300">loaded_context_length</span></td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/v0/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
                 </tbody>
             </table>
         </div>
@@ -47,12 +71,13 @@
                 </thead>
                 <tbody class="text-xs">
                     <tr class="border-b border-gray-700/30 bg-gray-900/30"><td colspan="5" class="py-2 px-3 text-gray-500 uppercase font-semibold">Models</td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models</td><td class="py-2 px-3 text-gray-400">Model list as JSON</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models</td><td class="py-2 px-3 text-gray-400">Model list with context metadata (v1+v0 merged)</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/models/loaded</td><td class="py-2 px-3 text-gray-400">Currently loaded models</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/models/loaded', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/api/v0/models</td><td class="py-2 px-3 text-gray-400">LMS v0 models proxy (context metadata)</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/api/v0/models', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/download/status?q=name</td><td class="py-2 px-3 text-gray-400">Download progress</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3"></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-green-400">GET</td><td class="py-2 px-3 font-mono text-gray-200">/models/load/status</td><td class="py-2 px-3 text-gray-400">Model load status</td><td class="py-2 px-3 text-gray-500">—</td><td class="py-2 px-3 text-right"><button onclick="tryEndpoint('/models/load/status', this)" class="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded">Try</button></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/download</td><td class="py-2 px-3 text-gray-400">Start model download</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
-                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/load</td><td class="py-2 px-3 text-gray-400">Load model into GPU</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
+                    <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/load</td><td class="py-2 px-3 text-gray-400">Load model into GPU</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"...","parallel":1}</td><td class="py-2 px-3"></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-yellow-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/unload</td><td class="py-2 px-3 text-gray-400">Unload model</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
                     <tr class="border-b border-gray-700/30"><td class="py-2 px-3 text-red-400">POST</td><td class="py-2 px-3 font-mono text-gray-200">/models/delete</td><td class="py-2 px-3 text-gray-400">Delete model from disk</td><td class="py-2 px-3 font-mono text-gray-500">{"model_name":"..."}</td><td class="py-2 px-3"></td></tr>
 

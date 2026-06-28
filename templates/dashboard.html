@@ -47,9 +47,16 @@
                 <div class="min-w-0 mr-2">
                     <div class="flex items-center gap-1">
                         <span class="text-sm font-mono truncate">{{ model.name }}</span>
-                        <span class="info-icon">i<span class="info-popup">~/.lmstudio/models/&lt;publisher&gt;/{{ model.name }}/</span></span>
+                        <span class="info-icon cursor-pointer hover:text-yellow-400" onclick="toggleInfoPopup(this, event)">i<span class="info-popup" onclick="event.stopPropagation()">
+                            {% if !model.params.is_empty() %}<span class="text-gray-100">Params:</span> <span class="text-gray-500">{{ model.params }}</span><br>{% endif %}
+                            {% if !model.arch.is_empty() %}<span class="text-gray-100">Arch:</span> <span class="text-gray-500">{{ model.arch }}</span><br>{% endif %}
+                            {% if !model.size.is_empty() %}<span class="text-gray-100">Size:</span> <span class="text-gray-500">{{ model.size }}</span><br>{% endif %}
+                            {% if !model.quantization.is_empty() %}<span class="text-gray-100">Quant:</span> <span class="text-gray-500">{{ model.quantization }}</span><br>{% endif %}
+                            {% if !model.max_context.is_empty() %}<span class="text-gray-100">Context:</span> <span class="text-gray-500">{{ model.max_context }}</span><br>{% endif %}
+                            {% if !model.publisher.is_empty() %}<span class="text-gray-100">Publisher:</span> <span class="text-gray-500">{{ model.publisher }}</span><br>{% endif %}
+                            <span class="text-gray-100">Path:</span> <span class="text-gray-500 cursor-pointer hover:text-blue-300" onclick="navigator.clipboard.writeText('{{ model.display_path() }}').then(() => showToast('Path copied to clipboard', false)).catch(() => showToast('Copy failed', true))">{{ model.display_path() }}</span>
+                        </span></span>
                     </div>
-                    <span class="text-xs text-gray-500">{{ model.params }} · {{ model.arch }} · {{ model.size }}</span>
                 </div>
                 <div class="flex gap-1 shrink-0">
                     <button onclick="loadModel('{{ model.name }}', this)"
@@ -144,7 +151,21 @@
 <script>
 async function loadModel(name, btn) {
     document.getElementById('error-card').classList.add('hidden');
-    await apiPost('/models/load', {model_name: name}, btn);
+    // Read the persisted parallel setting (saved on the models page) so dashboard
+    // loads respect the user's slot choice. Falls back to server default if unset.
+    let parallel = null;
+    try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        const entry = data.find(([k]) => k === 'models_settings');
+        if (entry) {
+            const settings = JSON.parse(entry[1]);
+            if (settings['default-parallel']) parallel = parseInt(settings['default-parallel']);
+        }
+    } catch(e) {}
+    const body = {model_name: name};
+    if (parallel) body.parallel = parallel;
+    await apiPost('/models/load', body, btn);
     const loadingCard = `
         <div class="bg-gray-900 rounded p-3 border border-yellow-700 mt-2" id="loading-card">
             <div class="flex items-center gap-2">

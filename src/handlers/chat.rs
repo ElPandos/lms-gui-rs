@@ -1,3 +1,5 @@
+//! Chat completion and latency speed test handlers.
+
 use axum::extract::State;
 use axum::Json;
 
@@ -22,8 +24,15 @@ pub struct ChatRequest {
     pub system_prompt: Option<String>,
 }
 
-fn default_temperature() -> f64 { 0.7 }
-fn default_max_tokens() -> u32 { 1024 }
+/// Default sampling temperature for chat completions (serde default fn).
+fn default_temperature() -> f64 {
+    0.7
+}
+
+/// Default max-token cap for chat completions (serde default fn).
+fn default_max_tokens() -> u32 {
+    1024
+}
 
 /// Response from a chat completion call.
 #[derive(Debug, serde::Serialize)]
@@ -77,6 +86,71 @@ pub struct SpeedTestStats {
     pub sigma: u32,
 }
 
+/// Compute speed test statistics from call results. Marks outliers in-place.
+///
+/// - `results`: mutable slice of test calls (outlier field updated in-place)
+/// - `total_calls`: the original requested call count (may differ from results.len()
+///   if some calls failed)
+/// - `sigma`: outlier threshold in standard deviations (0 = no filtering)
+fn compute_speedtest_stats(
+    results: &mut [SpeedTestCall],
+    total_calls: u32,
+    sigma: u32,
+) -> SpeedTestStats {
+    let durations: Vec<f64> = results.iter().map(|r| r.duration_ms as f64).collect();
+    let n = durations.len() as f64;
+    let mean = durations.iter().sum::<f64>() / n;
+    let variance = durations.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n;
+    let std_dev = variance.sqrt();
+
+    // Mark outliers based on sigma
+    if sigma > 0 {
+        let threshold = std_dev * sigma as f64;
+        for r in results.iter_mut() {
+            if (r.duration_ms as f64 - mean).abs() > threshold {
+                r.outlier = true;
+            }
+        }
+    }
+
+    let filtered: Vec<f64> = results
+        .iter()
+        .filter(|r| !r.outlier)
+        .map(|r| r.duration_ms as f64)
+        .collect();
+    let filtered_mean = if filtered.is_empty() {
+        mean
+    } else {
+        filtered.iter().sum::<f64>() / filtered.len() as f64
+    };
+
+    let mut sorted = durations.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = if sorted.len().is_multiple_of(2) {
+        (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
+    } else {
+        sorted[sorted.len() / 2]
+    };
+
+    SpeedTestStats {
+        mean_ms: mean,
+        median_ms: median,
+        min_ms: *durations
+            .iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(&0.0) as u64,
+        max_ms: *durations
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(&0.0) as u64,
+        std_dev_ms: std_dev,
+        filtered_mean_ms: filtered_mean,
+        total_calls,
+        filtered_calls: filtered.len() as u32,
+        sigma,
+    }
+}
+
 /// Send a chat completion request to the loaded model.
 pub async fn chat_send(
     State(state): State<AppState>,
@@ -110,6 +184,8 @@ pub async fn chat_send(
     }
 }
 
+/// Rotating set of short factual prompts used by the speed test to minimize
+/// output-token variance across calls.
 const SPEED_TEST_PROMPTS: &[&str] = &[
     "What is 2+2? Reply with only the number.",
     "Name the capital of France. Reply with only the city name.",
@@ -156,7 +232,9 @@ pub async fn chat_speedtest(
         top_p: None,
         frequency_penalty: None,
         presence_penalty: None,
-        system_prompt: Some("You are a precise assistant. Always give the shortest possible answer.".to_string()),
+        system_prompt: Some(
+            "You are a precise assistant. Always give the shortest possible answer.".to_string(),
+        ),
     };
     let _ = state.lms.chat_completion(&warmup_req).await;
 
@@ -171,11 +249,18 @@ pub async fn chat_speedtest(
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
-            system_prompt: Some("You are a precise assistant. Always give the shortest possible answer.".to_string()),
+            system_prompt: Some(
+                "You are a precise assistant. Always give the shortest possible answer."
+                    .to_string(),
+            ),
         };
 
         let start = std::time::Instant::now();
-        let (response, tokens) = state.lms.chat_completion(&chat_req).await.unwrap_or_default();
+        let (response, tokens) = state
+            .lms
+            .chat_completion(&chat_req)
+            .await
+            .unwrap_or_default();
         let duration = start.elapsed().as_millis() as u64;
 
         results.push(SpeedTestCall {
@@ -188,49 +273,85 @@ pub async fn chat_speedtest(
         });
     }
 
-    // Calculate stats
-    let durations: Vec<f64> = results.iter().map(|r| r.duration_ms as f64).collect();
-    let n = durations.len() as f64;
-    let mean = durations.iter().sum::<f64>() / n;
-    let variance = durations.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n;
-    let std_dev = variance.sqrt();
+    let stats = compute_speedtest_stats(&mut results, req.num_calls, req.sigma);
 
-    // Mark outliers based on sigma
-    if req.sigma > 0 {
-        let threshold = std_dev * req.sigma as f64;
-        for r in &mut results {
-            if (r.duration_ms as f64 - mean).abs() > threshold {
-                r.outlier = true;
-            }
+    tracing::info!(model = %req.model, mean_ms = %stats.mean_ms, min_ms = stats.min_ms, max_ms = stats.max_ms, "Speed test completed");
+    Json(SpeedTestResult {
+        success: true,
+        results,
+        stats,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a [`SpeedTestCall`] with fixed tokens/prompt/response for tests.
+    fn make_call(index: u32, duration_ms: u64) -> SpeedTestCall {
+        SpeedTestCall {
+            index,
+            duration_ms,
+            tokens: 10,
+            prompt: "test".to_string(),
+            response: "ok".to_string(),
+            outlier: false,
         }
     }
 
-    let filtered: Vec<f64> = results.iter()
-        .filter(|r| !r.outlier)
-        .map(|r| r.duration_ms as f64)
-        .collect();
-    let filtered_mean = if filtered.is_empty() { mean } else { filtered.iter().sum::<f64>() / filtered.len() as f64 };
+    #[test]
+    fn stats_basic_3_calls_sigma_0() {
+        let mut results = vec![make_call(1, 100), make_call(2, 200), make_call(3, 300)];
+        let stats = compute_speedtest_stats(&mut results, 3, 0);
+        assert_eq!(stats.total_calls, 3);
+        assert_eq!(stats.sigma, 0);
+        assert_eq!(stats.mean_ms, 200.0); // (100+200+300)/3
+        assert_eq!(stats.median_ms, 200.0); // middle of [100,200,300]
+        assert_eq!(stats.min_ms, 100);
+        assert_eq!(stats.max_ms, 300);
+        // sigma=0 means no outlier marking
+        assert!(!results[0].outlier);
+        assert!(!results[1].outlier);
+        assert!(!results[2].outlier);
+        assert_eq!(stats.filtered_calls, 3); // no outliers with sigma=0
+    }
 
-    let mut sorted = durations.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = if sorted.len() % 2 == 0 {
-        (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
-    } else {
-        sorted[sorted.len() / 2]
-    };
+    #[test]
+    fn stats_even_count_median() {
+        let mut results = vec![
+            make_call(1, 100),
+            make_call(2, 200),
+            make_call(3, 300),
+            make_call(4, 400),
+        ];
+        let stats = compute_speedtest_stats(&mut results, 4, 0);
+        assert_eq!(stats.median_ms, 250.0); // (200+300)/2
+    }
 
-    let stats = SpeedTestStats {
-        mean_ms: mean,
-        median_ms: median,
-        min_ms: *durations.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0) as u64,
-        max_ms: *durations.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0) as u64,
-        std_dev_ms: std_dev,
-        filtered_mean_ms: filtered_mean,
-        total_calls: req.num_calls,
-        filtered_calls: filtered.len() as u32,
-        sigma: req.sigma,
-    };
+    #[test]
+    fn stats_outlier_marking_sigma_1() {
+        // mean=250, std_dev=150, threshold=150; |500-250|=250>150 -> outlier
+        let mut results = vec![
+            make_call(1, 100),
+            make_call(2, 200),
+            make_call(3, 200),
+            make_call(4, 500),
+        ];
+        let stats = compute_speedtest_stats(&mut results, 4, 1);
+        assert!(results[3].outlier); // 500ms is an outlier
+        assert!(!results[0].outlier); // 100ms is within 1 sigma
+        assert!(stats.filtered_calls < 4);
+    }
 
-    tracing::info!(model = %req.model, mean_ms = %mean, min_ms = stats.min_ms, max_ms = stats.max_ms, "Speed test completed");
-    Json(SpeedTestResult { success: true, results, stats })
+    #[test]
+    fn stats_single_call() {
+        let mut results = vec![make_call(1, 42)];
+        let stats = compute_speedtest_stats(&mut results, 1, 1);
+        assert_eq!(stats.mean_ms, 42.0);
+        assert_eq!(stats.median_ms, 42.0);
+        assert_eq!(stats.min_ms, 42);
+        assert_eq!(stats.max_ms, 42);
+        assert_eq!(stats.std_dev_ms, 0.0);
+        assert!(!results[0].outlier);
+    }
 }
